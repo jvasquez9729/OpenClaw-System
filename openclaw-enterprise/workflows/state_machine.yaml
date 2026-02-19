@@ -1,0 +1,45 @@
+workflow_name: enterprise_7_step_cycle
+initial_state: VALIDATION
+terminal_states:
+  - DONE
+  - REJECTED
+states:
+  VALIDATION:
+    allowed_next:
+      - DECOMPOSITION
+      - REJECTED
+  DECOMPOSITION:
+    allowed_next:
+      - EXECUTION
+      - REJECTED
+  EXECUTION:
+    allowed_next:
+      - AUDIT
+      - REJECTED
+  AUDIT:
+    allowed_next:
+      - CONSOLIDATION
+      - REJECTED
+  CONSOLIDATION:
+    allowed_next:
+      - EXEC_SUMMARY
+      - REJECTED
+  EXEC_SUMMARY:
+    allowed_next:
+      - HITL_WAIT
+      - REJECTED
+  HITL_WAIT:
+    allowed_next:
+      - DONE
+      - REJECTED
+
+transition_controls:
+  require_event_log: true
+  require_agent_id: true
+  require_model_id: true
+  require_execution_id: true
+
+irreversible_actions_require_hitl:
+  - merge_pull_request
+  - deploy
+  - write_production_finance_data

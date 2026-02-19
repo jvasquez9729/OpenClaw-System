@@ -1,0 +1,73 @@
+policy_version: 1
+agents:
+  chief_of_staff:
+    model: claude-opus-4.6
+    allowed_tools:
+      - route_task
+      - decompose_task
+      - consolidate_report
+      - request_hitl_approval
+    denied_tools:
+      - write_production_db
+      - merge_pull_request
+      - deploy
+    requires_human_approval_for:
+      - merge_pull_request
+      - deploy
+      - write_financial_baseline
+
+  financial_analyst:
+    model: claude-opus-4.6
+    allowed_tools:
+      - read_financial_documents
+      - compute_financial_kpis
+      - build_financial_narrative
+    denied_tools:
+      - push_code
+      - merge_pull_request
+      - change_security_policy
+
+  financial_parser:
+    model: kimi-2.5
+    allowed_tools:
+      - parse_pdf
+      - normalize_financial_dataset
+      - write_mem_finance_staging
+    denied_tools:
+      - write_mem_tech
+      - merge_pull_request
+
+  developer:
+    model: gpt-4o
+    allowed_tools:
+      - edit_code
+      - run_unit_tests
+      - open_pull_request
+    denied_tools:
+      - approve_own_pr
+      - deploy
+      - write_mem_finance
+
+  code_reviewer:
+    model: claude-sonnet-4.5
+    allowed_tools:
+      - review_diff
+      - run_static_analysis
+      - request_changes
+    denied_tools:
+      - merge_pull_request
+
+  security_agent:
+    model: claude-sonnet-4.5
+    allowed_tools:
+      - run_owasp_checks
+      - dependency_scan
+      - secret_scan
+      - approve_security_gate
+    denied_tools:
+      - edit_business_logic
+      - merge_pull_request
+
+limits:
+  max_retries_per_state: 2
+  max_parallel_agents: 4

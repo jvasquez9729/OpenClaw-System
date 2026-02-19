@@ -1,0 +1,48 @@
+{
+  "system_name": "openclaw-enterprise-os",
+  "version": "0.1.0",
+  "orchestrator": {
+    "agent": "chief_of_staff",
+    "model": "claude-opus-4.6",
+    "execution_mode": "state_machine",
+    "direct_code_execution": false
+  },
+  "global_controls": {
+    "human_in_the_loop_required": true,
+    "approval_command": "/approve",
+    "policy_file": "../policies/agent_capabilities.yaml",
+    "workflow_file": "../workflows/state_machine.yaml"
+  },
+  "memory": {
+    "provider": "postgresql_pgvector",
+    "connection_env": "OPENCLAW_DB_URL",
+    "domains": [
+      "mem_finance",
+      "mem_tech",
+      "mem_audit"
+    ]
+  },
+  "audit": {
+    "enabled": true,
+    "ledger_table": "mem_audit.execution_ledger",
+    "hash_algorithm": "sha256",
+    "daily_chain_verification": true
+  },
+  "budgets": {
+    "finance_analysis": {
+      "max_cost_usd": 8,
+      "max_tokens": 140000,
+      "max_latency_seconds": 80
+    },
+    "code_generation": {
+      "max_cost_usd": 4,
+      "max_tokens": 90000,
+      "max_latency_seconds": 45
+    },
+    "security_audit": {
+      "max_cost_usd": 3,
+      "max_tokens": 60000,
+      "max_latency_seconds": 40
+    }
+  }
+}
