@@ -123,6 +123,29 @@ def _normalize_status(raw: Any) -> str:
     return s
 
 
+def _first_non_empty(row: dict[str, Any], keys: tuple[str, ...], default: Any = None) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return default
+
+
+def _coerce_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
 def _load_json_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         return {}
@@ -268,6 +291,99 @@ def ensure_tables() -> None:
                 """
             )
         conn.commit()
+
+
+def _table_exists(schema: str, table: str) -> bool:
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass(%s)", (f"{schema}.{table}",))
+            row = cur.fetchone()
+    return bool(row and row[0])
+
+
+def fetch_execution_ledger_rows(limit: int, execution_id: str | None = None) -> list[dict[str, Any]]:
+    if not _table_exists("mem_audit", "execution_ledger"):
+        return []
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            if execution_id:
+                cur.execute(
+                    """
+                    SELECT to_jsonb(t) AS row
+                    FROM mem_audit.execution_ledger t
+                    WHERE execution_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (execution_id, max(1, limit)),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT to_jsonb(t) AS row
+                    FROM mem_audit.execution_ledger t
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (max(1, limit),),
+                )
+            rows = cur.fetchall()
+    return [row[0] for row in rows if row and isinstance(row[0], dict)]
+
+
+def map_ledger_row_to_event(row: dict[str, Any]) -> dict[str, Any]:
+    ts = _coerce_datetime(_first_non_empty(row, ("updated_at", "created_at", "timestamp")))
+    status = _normalize_status(_first_non_empty(row, ("status", "state", "decision", "result"), "PROPOSED"))
+    reason = _first_non_empty(
+        row,
+        ("reason", "description", "message", "summary", "action", "decision_reason", "task", "title"),
+        "",
+    )
+    return {
+        "timestamp": _to_iso(ts),
+        "agent_id": str(_first_non_empty(row, ("agent_id", "agent", "owner"), "system")),
+        "execution_id": _first_non_empty(row, ("execution_id", "run_id", "id")),
+        "status": status,
+        "reason": str(reason or status),
+        "source": str(_first_non_empty(row, ("source",), "openclaw")),
+    }
+
+
+def map_ledger_rows_to_executions(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        execution_id = str(_first_non_empty(row, ("execution_id", "run_id", "id"), "") or "").strip()
+        if not execution_id:
+            continue
+        if execution_id in seen:
+            continue
+        seen.add(execution_id)
+        ts = _coerce_datetime(_first_non_empty(row, ("updated_at", "created_at", "timestamp")))
+        status = _normalize_status(_first_non_empty(row, ("status", "state", "decision", "result"), "PROPOSED"))
+        title = _first_non_empty(row, ("title", "task", "name"), f"Execution {execution_id}")
+        description = _first_non_empty(
+            row,
+            ("description", "reason", "message", "summary", "decision_reason", "action"),
+            "",
+        )
+        items.append(
+            {
+                "execution_id": execution_id,
+                "agent_id": _first_non_empty(row, ("agent_id", "agent", "owner"), "chief_of_staff"),
+                "title": str(title),
+                "description": str(description),
+                "status": status,
+                "state": status,
+                "updated_at": _to_iso(ts),
+                "created_at": _to_iso(_coerce_datetime(_first_non_empty(row, ("created_at", "timestamp")))),
+                "cost_usd": float(_first_non_empty(row, ("cost_usd",), 0) or 0),
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
 
 
 def _extract_agent_mapping(raw_data: Any) -> dict[str, dict[str, Any]]:
@@ -611,6 +727,10 @@ def upsert_runtime_execution(
 
 
 def fetch_executions_local(limit: int) -> list[dict[str, Any]]:
+    ledger_rows = fetch_execution_ledger_rows(limit=max(200, limit * 5))
+    if ledger_rows:
+        return map_ledger_rows_to_executions(ledger_rows, limit)
+
     with _db_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -640,6 +760,12 @@ def fetch_executions_local(limit: int) -> list[dict[str, Any]]:
 
 
 def fetch_execution_local(execution_id: str) -> dict[str, Any] | None:
+    ledger_rows = fetch_execution_ledger_rows(limit=200, execution_id=execution_id)
+    if ledger_rows:
+        mapped = map_ledger_rows_to_executions(ledger_rows, limit=1)
+        if mapped:
+            return mapped[0]
+
     with _db_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -667,6 +793,11 @@ def fetch_execution_local(execution_id: str) -> dict[str, Any] | None:
 
 
 def fetch_recent_events_local(limit: int) -> list[dict[str, Any]]:
+    ledger_rows = fetch_execution_ledger_rows(limit=limit)
+    if ledger_rows:
+        items = [map_ledger_row_to_event(row) for row in reversed(ledger_rows)]
+        return items
+
     with _db_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -700,35 +831,57 @@ def fetch_recent_events_local(limit: int) -> list[dict[str, Any]]:
 def compute_permission_stats_local() -> dict[str, Any]:
     with _db_connect() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT COUNT(*)
-                FROM mem_audit.runtime_events
-                WHERE created_at >= now() - interval '24 hours'
-                """
-            )
+            if _table_exists("mem_audit", "execution_ledger"):
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM mem_audit.execution_ledger
+                    WHERE created_at >= now() - interval '24 hours'
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM mem_audit.runtime_events
+                    WHERE created_at >= now() - interval '24 hours'
+                    """
+                )
             row = cur.fetchone()
     return {"active_tokens": int(row[0] if row else 0)}
 
 
 def compute_agents_state_local() -> list[dict[str, Any]]:
     capabilities = load_agent_capabilities()
-    with _db_connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT ON (agent_id) agent_id, status, updated_at
-                FROM mem_audit.runtime_executions
-                WHERE agent_id IS NOT NULL
-                ORDER BY agent_id, updated_at DESC
-                """
-            )
-            rows = cur.fetchall()
-            cur.execute("SELECT DISTINCT agent_id FROM mem_audit.chat_messages")
-            chat_agents = [r[0] for r in cur.fetchall()]
+    status_by_agent: dict[str, str] = {}
+    all_agent_ids = set(capabilities.keys()) | set(DEFAULT_AGENT_IDS)
 
-    status_by_agent = {str(row[0]): _normalize_status(row[1]) for row in rows if row[0]}
-    all_agent_ids = set(capabilities.keys()) | set(chat_agents) | set(status_by_agent.keys()) | set(DEFAULT_AGENT_IDS)
+    ledger_rows = fetch_execution_ledger_rows(limit=1000)
+    if ledger_rows:
+        for row in ledger_rows:
+            agent_id = str(_first_non_empty(row, ("agent_id", "agent", "owner"), "") or "").strip()
+            if not agent_id:
+                continue
+            if agent_id in status_by_agent:
+                continue
+            status_by_agent[agent_id] = _normalize_status(_first_non_empty(row, ("status", "state", "decision"), "IDLE"))
+            all_agent_ids.add(agent_id)
+    else:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (agent_id) agent_id, status, updated_at
+                    FROM mem_audit.runtime_executions
+                    WHERE agent_id IS NOT NULL
+                    ORDER BY agent_id, updated_at DESC
+                    """
+                )
+                rows = cur.fetchall()
+                cur.execute("SELECT DISTINCT agent_id FROM mem_audit.chat_messages")
+                chat_agents = [r[0] for r in cur.fetchall()]
+        status_by_agent = {str(row[0]): _normalize_status(row[1]) for row in rows if row[0]}
+        all_agent_ids |= set(chat_agents) | set(status_by_agent.keys())
 
     items: list[dict[str, Any]] = []
     for agent_id in sorted(all_agent_ids):
@@ -811,12 +964,18 @@ def on_startup() -> None:
 @app.get("/runtime/integration/status")
 def runtime_integration_status() -> dict[str, Any]:
     _refresh_openapi_cache()
+    ledger_available = False
+    try:
+        ledger_available = _table_exists("mem_audit", "execution_ledger")
+    except Exception:
+        ledger_available = False
     return {
         "openclaw_base_url": _OPENAPI_CACHE.get("base_url") or _openclaw_base_url(),
         "openclaw_base_candidates": _openclaw_base_candidates(),
         "ollama_base_url": _ollama_base_url(),
         "openclaw_paths_detected": sorted(list(_OPENAPI_CACHE.get("paths") or set())),
         "psycopg_available": psycopg is not None,
+        "execution_ledger_available": ledger_available,
     }
 
 
@@ -899,7 +1058,12 @@ def get_chat_agents() -> dict[str, Any]:
             "created_at": _to_iso(row[5]),
         }
 
-    all_ids = sorted(set(capabilities.keys()) | set(latest_by_agent.keys()))
+    ledger_agent_ids = {
+        str(_first_non_empty(row, ("agent_id", "agent", "owner"), "") or "").strip()
+        for row in fetch_execution_ledger_rows(limit=300)
+    }
+    ledger_agent_ids.discard("")
+    all_ids = sorted(set(capabilities.keys()) | set(latest_by_agent.keys()) | ledger_agent_ids)
     items: list[dict[str, Any]] = []
     for agent_id in all_ids:
         cfg = capabilities.get(agent_id, {})
