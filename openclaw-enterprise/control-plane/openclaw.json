@@ -1,0 +1,10 @@
+{
+  "openclaw_base_url": "http://127.0.0.1:8000",
+  "runtime_base_url": "http://127.0.0.1:8001",
+  "ollama_base_url": "http://127.0.0.1:11434",
+  "pg_host": "127.0.0.1",
+  "pg_port": "5433",
+  "pg_user": "aiadmin",
+  "pg_database": "openclaw",
+  "ollama_model": "llama3.2"
+}

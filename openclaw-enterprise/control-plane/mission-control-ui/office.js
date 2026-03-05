@@ -631,7 +631,7 @@
         const openapi = await fetchJson(api("/openapi.json"));
         parseOpenApiCaps(openapi);
       } catch {
-        const candidates = [state.base, "http://127.0.0.1:19000", "http://127.0.0.1:8000"];
+        const candidates = [state.base, "http://127.0.0.1:8001", "http://127.0.0.1:8000"];
         let recovered = false;
         for (const candidate of [...new Set(candidates)]) {
           try {

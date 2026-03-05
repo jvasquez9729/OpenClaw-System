@@ -7,12 +7,21 @@
 
   /* ── Agent definitions ───────────────────────────────────── */
   const AGENTS = {
-    chief_of_staff:     { tile: [2, 1], color: 0xff7d5f, label: "🧠 Chief"    },
-    fullstack_builder:  { tile: [5, 1], color: 0x3cc9ff, label: "🛠️ Builder"  },
-    code_reviewer:      { tile: [8, 1], color: 0x9cfa6b, label: "🧪 Review"   },
-    security_auditor:   { tile: [2, 5], color: 0xffc857, label: "🛡️ Security" },
-    finance_specialist: { tile: [5, 5], color: 0xc59dff, label: "💸 Finance"  },
-    devops_engineer:    { tile: [8, 5], color: 0x49e1b8, label: "☁️ DevOps"   },
+    chief_of_staff:   { tile: [2, 1], color: 0xff7d5f, label: "🧠 Chief" },
+    developer:        { tile: [5, 1], color: 0x3cc9ff, label: "🛠️ Dev" },
+    code_reviewer:    { tile: [8, 1], color: 0x9cfa6b, label: "🧪 Review" },
+    security_agent:   { tile: [2, 5], color: 0xffc857, label: "🛡️ Security" },
+    financial_analyst:{ tile: [5, 5], color: 0xc59dff, label: "💸 Analyst" },
+    financial_parser: { tile: [8, 5], color: 0x49e1b8, label: "📊 Parser" },
+  };
+
+  const AGENT_ALIASES = {
+    chief_of_staff: ["chief_of_staff"],
+    developer: ["developer", "fullstack_builder"],
+    code_reviewer: ["code_reviewer"],
+    security_agent: ["security_agent", "security_auditor"],
+    financial_analyst: ["financial_analyst", "finance_specialist"],
+    financial_parser: ["financial_parser", "devops_engineer"],
   };
 
   /* ── Helpers ─────────────────────────────────────────────── */
@@ -531,7 +540,8 @@
       const map     = new Map(agents.map((a) => [a.agent_id, a]));
 
       this.agentViews.forEach((view, id) => {
-        const st  = map.get(id);
+        const aliases = AGENT_ALIASES[id] || [id];
+        const st = aliases.map((alias) => map.get(alias)).find(Boolean);
         const raw = (st && st.state ? String(st.state) : "idle").toLowerCase();
         const mode =
           raw === "working"   ? "working"   :

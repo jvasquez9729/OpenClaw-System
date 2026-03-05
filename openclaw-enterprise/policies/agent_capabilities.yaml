@@ -1,0 +1,19 @@
+agents:
+  chief_of_staff:
+    model: llama3.2
+    prompt_file: prompts/chief_of_staff.md
+  financial_analyst:
+    model: llama3.2
+    prompt_file: prompts/financial_analyst.md
+  financial_parser:
+    model: llama3.2
+    prompt_file: prompts/financial_parser.md
+  developer:
+    model: llama3.2
+    prompt_file: prompts/developer.md
+  code_reviewer:
+    model: llama3.2
+    prompt_file: prompts/code_reviewer.md
+  security_agent:
+    model: llama3.2
+    prompt_file: prompts/security_agent.md
