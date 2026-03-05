@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenClaw Mission Control</title>
+
+  <!-- H3: Security headers via meta tags ──────────────────────── -->
+  <!-- Previene clickjacking -->
+  <meta http-equiv="X-Frame-Options" content="DENY" />
+  <!-- Content Security Policy: solo scripts locales + Phaser CDN conocido -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 script-src 'self' https://cdn.jsdelivr.net;
+                 style-src 'self' 'unsafe-inline';
+                 img-src 'self' data: blob:;
+                 connect-src http://127.0.0.1:* http://localhost:*;
+                 object-src 'none';
+                 base-uri 'self';" />
+  <!-- No filtrar Referer a destinos externos -->
+  <meta name="referrer" content="no-referrer" />
+
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo"></div>
+        <div>
+          <div class="brand-title">Mission Control</div>
+          <div class="brand-sub">OpenClaw</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-group">
+          <div class="nav-heading">Mission Control</div>
+          <a href="#home" data-route="home" class="active"><span class="nav-ico">⌂</span>Home</a>
+          <a href="#chat" data-route="chat"><span class="nav-ico">💬</span>Chat</a>
+          <a href="#stage" data-route="stage"><span class="nav-ico">🎭</span>Stage</a>
+          <a href="#gallery" data-route="gallery"><span class="nav-ico">🖼️</span>Gallery</a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-heading">Operations</div>
+          <a href="#missions" data-route="missions"><span class="nav-ico">▦</span>Missions</a>
+          <a href="#agents" data-route="agents"><span class="nav-ico">🤖</span>Agents</a>
+          <a href="#events" data-route="events"><span class="nav-ico">◷</span>Events</a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-heading">System</div>
+          <a href="#analytics" data-route="analytics"><span class="nav-ico">◫</span>Analytics</a>
+          <a href="#settings" data-route="settings"><span class="nav-ico">☰</span>Settings</a>
+        </div>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="small muted">OpenClaw Office Sim v2</div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="page-title" id="pageTitle">Agents</div>
+          <div class="page-sub" id="pageSub">Live state</div>
+        </div>
+
+        <div class="api-row">
+          <button id="themeToggle" class="theme-toggle" title="Toggle light/dark">🌗</button>
+          <span class="api-label">API</span>
+          <input id="apiBase" type="text" value="http://127.0.0.1:8000" />
+          <button id="saveApi">Guardar</button>
+          <span id="apiStatus" class="badge bad">offline</span>
+        </div>
+      </header>
+
+      <main class="content">
+        <section id="page-home" class="page hidden">
+          <div class="grid grid-4">
+            <div class="card">
+              <div class="card-hd">
+                <div class="title">Events Today</div>
+                <div class="muted">permissionStats.active_tokens</div>
+              </div>
+              <div class="kpi" id="kpiEvents">0</div>
+            </div>
+            <div class="card">
+              <div class="card-hd">
+                <div class="title">Total Memories</div>
+                <div class="muted">agents.length</div>
+              </div>
+              <div class="kpi" id="kpiMemories">0</div>
+            </div>
+            <div class="card">
+              <div class="card-hd">
+                <div class="title">Active Agents</div>
+                <div class="muted">working</div>
+              </div>
+              <div class="kpi" id="kpiActive">0</div>
+            </div>
+            <div class="card">
+              <div class="card-hd">
+                <div class="title">Budget Used</div>
+                <div class="muted">sum(cost_usd)</div>
+              </div>
+              <div class="kpi" id="kpiBudget">$0.00</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="page-chat" class="page hidden">
+          <div class="chat-layout">
+            <aside class="card convo-sidebar">
+              <div class="card-hd">
+                <div>
+                  <div class="title">Conversations</div>
+                  <div class="muted">Agents + latest activity</div>
+                </div>
+              </div>
+              <div id="conversationList" class="conversation-list"></div>
+            </aside>
+
+            <section class="card chat-main">
+              <div class="card-hd">
+                <div>
+                  <div class="title" id="chatThreadTitle"># chief_of_staff</div>
+                  <div class="muted" id="chatThreadSub">Realtime runtime feed</div>
+                </div>
+              </div>
+              <div id="chatMessages" class="chat-messages"></div>
+              <div class="chat-composer">
+                <input id="chatInput" type="text" placeholder="Escribe una instrucción para el agente..." />
+                <button id="chatSend" class="btn">Send</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="page-stage" class="page hidden">
+          <div class="card">
+            <div class="card-hd">
+              <div>
+                <div class="title">Stage</div>
+                <div class="muted">Mission theater timeline</div>
+              </div>
+            </div>
+            <div class="stage-grid">
+              <div class="stage-tile">🎬 Active mission orchestration</div>
+              <div class="stage-tile">🛰️ Runtime handoff checkpoints</div>
+              <div class="stage-tile">🧠 HITL decision spotlight</div>
+              <div class="stage-tile">📡 Agent queue pulse</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="page-gallery" class="page hidden">
+          <div class="card">
+            <div class="card-hd">
+              <div>
+                <div class="title">Gallery</div>
+                <div class="muted">Snapshots of mission status</div>
+              </div>
+            </div>
+            <div class="gallery-grid">
+              <div class="gallery-card">🌅 Morning standup state</div>
+              <div class="gallery-card">🧩 Build sprint snapshot</div>
+              <div class="gallery-card">🔐 Security audit review</div>
+              <div class="gallery-card">💸 Finance optimization run</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="page-missions" class="page hidden">
+          <div class="card">
+            <div class="card-hd">
+              <div>
+                <div class="title">Missions</div>
+                <div class="muted">Kanban en tiempo real + HITL controls</div>
+              </div>
+              <div class="right" style="display:flex; gap:8px; align-items:center;">
+                <input id="trackExecutionId" type="text" placeholder="execution_id" style="min-width:220px;" />
+                <button id="addTrackExecution" class="btn">Track</button>
+                <button id="clearTrackExecutions" class="btn bad">Clear</button>
+              </div>
+            </div>
+            <div class="kanban" id="kanban"></div>
+          </div>
+        </section>
+
+        <section id="page-agents" class="page">
+          <div class="card">
+            <div class="card-hd">
+              <div>
+                <div class="title">La Oficina Virtual</div>
+                <div class="muted">
+                  Agents working: <span id="workingCount">0</span>
+                </div>
+              </div>
+              <div class="right">
+                <span class="badge neutral" id="agentsBadge">agents: 0</span>
+              </div>
+            </div>
+
+            <div class="canvas-wrap">
+              <canvas id="office"></canvas>
+            </div>
+          </div>
+
+          <footer id="badgeBar" class="badge-bar"></footer>
+        </section>
+
+        <section id="page-events" class="page hidden">
+          <div class="card">
+            <div class="card-hd">
+              <div>
+                <div class="title">Events</div>
+                <div class="muted">permissionRecent auto-scroll</div>
+              </div>
+            </div>
+            <div id="eventsLog" class="events-log"></div>
+          </div>
+        </section>
+
+        <section id="page-analytics" class="page hidden">
+          <div class="card"><div class="title">Analytics</div><div class="muted">Coming soon</div></div>
+        </section>
+
+        <section id="page-settings" class="page hidden">
+          <div class="card">
+            <div class="card-hd">
+              <div>
+                <div class="title">Settings</div>
+                <div class="muted">Persistidos en localStorage</div>
+              </div>
+            </div>
+            <div class="settings-form">
+              <label>
+                <span>API URL</span>
+                <input id="settingsApiBase" type="text" />
+              </label>
+              <label>
+                <span>Polling (ms)</span>
+                <input id="settingsPollMs" type="number" min="500" step="100" />
+              </label>
+              <button id="saveSettings" class="btn">Guardar Settings</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <script src="./scene-office.js"></script>
+  <script src="./office.js"></script>
+</body>
+</html>
+
+
+
