@@ -36,18 +36,35 @@
 
   const officeCanvas = document.getElementById("office");
   const AGENT_META = {
-    chief_of_staff: { emoji: "🧠", color: "#ff7d5f", label: "Chief of Staff" },
-    fullstack_builder: { emoji: "🛠️", color: "#3cc9ff", label: "Fullstack Builder" },
-    code_reviewer: { emoji: "🧪", color: "#9cfa6b", label: "Code Reviewer" },
-    security_auditor: { emoji: "🛡️", color: "#ffc857", label: "Security Auditor" },
-    finance_specialist: { emoji: "💸", color: "#c59dff", label: "Finance Specialist" },
-    devops_engineer: { emoji: "☁️", color: "#49e1b8", label: "DevOps Engineer" },
+    chief_of_staff: { emoji: "🟠", color: "#ff9c59", label: "Arturo" },
+    fullstack_builder: { emoji: "🛠️", color: "#63b6ff", label: "Code Agent" },
+    code_reviewer: { emoji: "🤖", color: "#74d8ff", label: "Claudio" },
+    security_auditor: { emoji: "🛡️", color: "#a88bff", label: "Security Agent" },
+    finance_specialist: { emoji: "📈", color: "#ff7fc8", label: "Financial Analyst" },
+    devops_engineer: { emoji: "🧩", color: "#8be684", label: "Developer" },
+    publisher_agent: { emoji: "📣", color: "#ff9f6c", label: "Publisher" },
+    research_agent: { emoji: "🔎", color: "#9e86ff", label: "Research" },
+    strategist_agent: { emoji: "🎯", color: "#8bc0ff", label: "Strategist" },
+    copy_agent: { emoji: "📝", color: "#8fe6bb", label: "Copy" },
     system: { emoji: "📡", color: "#91a0b8", label: "System" },
     operator: { emoji: "🧑‍🚀", color: "#ffb45e", label: "Operator" },
   };
+  const CHAT_AGENT_SEED = [
+    "chief_of_staff",
+    "code_reviewer",
+    "fullstack_builder",
+    "finance_specialist",
+    "copy_agent",
+    "publisher_agent",
+    "research_agent",
+    "strategist_agent",
+    "security_auditor",
+    "devops_engineer",
+  ];
+  const runtimeDefaultBase = `${location.protocol}//${location.hostname}:8001`;
 
   const state = {
-    base: localStorage.getItem("apiBase") || apiBaseInput.value || "http://127.0.0.1:19000",
+    base: localStorage.getItem("apiBase") || apiBaseInput.value || runtimeDefaultBase || "http://127.0.0.1:8001",
     pollMs: Number(localStorage.getItem("pollMs") || "1000"),
     online: false,
     agents: [],
@@ -91,7 +108,7 @@
 
   function getAgentMeta(agentId) {
     const key = String(agentId || "system");
-    return AGENT_META[key] || { emoji: "🤖", color: "#8fb0ff", label: key.replace(/_/g, " ") };
+    return AGENT_META[key] || { emoji: "🤖", color: "#8fb0ff", label: key.replace(/_/g, " ").replace(/\b\w/g, (x) => x.toUpperCase()) };
   }
 
   function applyTheme(theme) {
@@ -375,25 +392,29 @@
   }
 
   function buildConversations() {
-    const ids = new Set(["chief_of_staff"]);
+    const ids = new Set(CHAT_AGENT_SEED);
     state.agents.forEach((a) => ids.add(String(a.agent_id || "").trim()));
     state.permissionRecent.forEach((e) => ids.add(String(e.agent_id || "").trim()));
+    Object.keys(state.localMessages || {}).forEach((id) => ids.add(String(id || "").trim()));
     ids.delete("");
     const rows = [...ids].map((id) => {
       const meta = getAgentMeta(id);
       const stateItem = state.agents.find((a) => a.agent_id === id);
       const recent = [...state.permissionRecent].reverse().find((e) => String(e.agent_id || "") === id);
       const status = String(stateItem?.state || recent?.status || "idle").toLowerCase();
-      const last = recent?.reason || recent?.action || recent?.decision_reason || "No recent messages";
+      const last = recent?.reason || recent?.action || recent?.decision_reason || "No messages yet";
+      const unread = status === "working" ? 2 : (status.includes("hitl") ? 1 : 0);
       return {
         id,
         meta,
         status,
         last,
+        unread,
       };
     });
 
     return rows.sort((a, b) => {
+      if ((b.unread || 0) !== (a.unread || 0)) return (b.unread || 0) - (a.unread || 0);
       const aw = a.status === "working" ? 1 : 0;
       const bw = b.status === "working" ? 1 : 0;
       if (aw !== bw) return bw - aw;
@@ -439,6 +460,10 @@
         <span class="convo-meta">
           <div class="convo-name">${esc(c.meta.label)}</div>
           <div class="convo-last">${esc(c.last)}</div>
+        </span>
+        <span class="convo-right">
+          <span class="status-dot ${esc(c.status)}"></span>
+          ${c.unread ? `<span class="convo-unread">${esc(c.unread)}</span>` : ""}
         </span>
       </button>
     `).join("");
@@ -530,7 +555,7 @@
         const openapi = await fetchJson(api("/openapi.json"));
         parseOpenApiCaps(openapi);
       } catch {
-        const candidates = [state.base, "http://127.0.0.1:19000", "http://127.0.0.1:8000"];
+        const candidates = [state.base, runtimeDefaultBase, "http://127.0.0.1:19000", "http://127.0.0.1:8000"];
         let recovered = false;
         for (const candidate of [...new Set(candidates)]) {
           try {

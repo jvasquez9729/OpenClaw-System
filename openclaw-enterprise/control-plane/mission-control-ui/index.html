@@ -14,7 +14,7 @@
                  script-src 'self' https://cdn.jsdelivr.net;
                  style-src 'self' 'unsafe-inline';
                  img-src 'self' data: blob:;
-                 connect-src http://127.0.0.1:* http://localhost:*;
+                 connect-src 'self' http://127.0.0.1:* http://localhost:* http://217.216.89.61:8001 http://217.216.89.61:4173;
                  object-src 'none';
                  base-uri 'self';" />
   <!-- No filtrar Referer a destinos externos -->
@@ -69,7 +69,7 @@
         <div class="api-row">
           <button id="themeToggle" class="theme-toggle" title="Toggle light/dark">🌗</button>
           <span class="api-label">API</span>
-          <input id="apiBase" type="text" value="http://127.0.0.1:8000" />
+          <input id="apiBase" type="text" value="http://127.0.0.1:8001" />
           <button id="saveApi">Guardar</button>
           <span id="apiStatus" class="badge bad">offline</span>
         </div>
