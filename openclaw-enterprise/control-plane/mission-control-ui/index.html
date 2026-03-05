@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -34,12 +34,24 @@
       </div>
 
       <nav class="nav">
-        <a href="#home" data-route="home" class="active"><span class="nav-ico">⌂</span>Home</a>
-        <a href="#missions" data-route="missions"><span class="nav-ico">▦</span>Missions</a>
-        <a href="#agents" data-route="agents"><span class="nav-ico">⚙</span>Agents</a>
-        <a href="#events" data-route="events"><span class="nav-ico">◷</span>Events</a>
-        <a href="#analytics" data-route="analytics"><span class="nav-ico">◫</span>Analytics</a>
-        <a href="#settings" data-route="settings"><span class="nav-ico">☰</span>Settings</a>
+        <div class="nav-group">
+          <div class="nav-heading">Mission Control</div>
+          <a href="#home" data-route="home" class="active"><span class="nav-ico">⌂</span>Home</a>
+          <a href="#chat" data-route="chat"><span class="nav-ico">💬</span>Chat</a>
+          <a href="#stage" data-route="stage"><span class="nav-ico">🎭</span>Stage</a>
+          <a href="#gallery" data-route="gallery"><span class="nav-ico">🖼️</span>Gallery</a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-heading">Operations</div>
+          <a href="#missions" data-route="missions"><span class="nav-ico">▦</span>Missions</a>
+          <a href="#agents" data-route="agents"><span class="nav-ico">🤖</span>Agents</a>
+          <a href="#events" data-route="events"><span class="nav-ico">◷</span>Events</a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-heading">System</div>
+          <a href="#analytics" data-route="analytics"><span class="nav-ico">◫</span>Analytics</a>
+          <a href="#settings" data-route="settings"><span class="nav-ico">☰</span>Settings</a>
+        </div>
       </nav>
 
       <div class="sidebar-foot">
@@ -55,6 +67,7 @@
         </div>
 
         <div class="api-row">
+          <button id="themeToggle" class="theme-toggle" title="Toggle light/dark">🌗</button>
           <span class="api-label">API</span>
           <input id="apiBase" type="text" value="http://127.0.0.1:8000" />
           <button id="saveApi">Guardar</button>
@@ -92,6 +105,68 @@
                 <div class="muted">sum(cost_usd)</div>
               </div>
               <div class="kpi" id="kpiBudget">$0.00</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="page-chat" class="page hidden">
+          <div class="chat-layout">
+            <aside class="card convo-sidebar">
+              <div class="card-hd">
+                <div>
+                  <div class="title">Conversations</div>
+                  <div class="muted">Agents + latest activity</div>
+                </div>
+              </div>
+              <div id="conversationList" class="conversation-list"></div>
+            </aside>
+
+            <section class="card chat-main">
+              <div class="card-hd">
+                <div>
+                  <div class="title" id="chatThreadTitle"># chief_of_staff</div>
+                  <div class="muted" id="chatThreadSub">Realtime runtime feed</div>
+                </div>
+              </div>
+              <div id="chatMessages" class="chat-messages"></div>
+              <div class="chat-composer">
+                <input id="chatInput" type="text" placeholder="Escribe una instrucción para el agente..." />
+                <button id="chatSend" class="btn">Send</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="page-stage" class="page hidden">
+          <div class="card">
+            <div class="card-hd">
+              <div>
+                <div class="title">Stage</div>
+                <div class="muted">Mission theater timeline</div>
+              </div>
+            </div>
+            <div class="stage-grid">
+              <div class="stage-tile">🎬 Active mission orchestration</div>
+              <div class="stage-tile">🛰️ Runtime handoff checkpoints</div>
+              <div class="stage-tile">🧠 HITL decision spotlight</div>
+              <div class="stage-tile">📡 Agent queue pulse</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="page-gallery" class="page hidden">
+          <div class="card">
+            <div class="card-hd">
+              <div>
+                <div class="title">Gallery</div>
+                <div class="muted">Snapshots of mission status</div>
+              </div>
+            </div>
+            <div class="gallery-grid">
+              <div class="gallery-card">🌅 Morning standup state</div>
+              <div class="gallery-card">🧩 Build sprint snapshot</div>
+              <div class="gallery-card">🔐 Security audit review</div>
+              <div class="gallery-card">💸 Finance optimization run</div>
             </div>
           </div>
         </section>
