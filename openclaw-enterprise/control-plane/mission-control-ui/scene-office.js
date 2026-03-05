@@ -159,6 +159,9 @@
       [[1, 7], [2, 7], [3, 7], [1, 8], [2, 8], [3, 8]].forEach(([tx, ty]) => {
         this._tile(rugs, tx, ty, PALETTE.pink, 0.45);
       });
+      [[8, 6], [9, 6], [8, 7], [9, 7]].forEach(([tx, ty]) => {
+        this._tile(rugs, tx, ty, PALETTE.mint, 0.42);
+      });
       rugs.setDepth(2);
 
       /* ── WALLS: cream pastel ─────────────────────────────── */
@@ -179,11 +182,18 @@
       wallDecor.fillRoundedRect(ws1.x - 68, ws1.y - 36, 136, 52, 8);
       wallDecor.fillStyle(0x84d9ff, 0.95);
       wallDecor.fillRoundedRect(ws1.x - 62, ws1.y - 30, 124, 40, 6);
+      wallDecor.fillStyle(0xffffff, 0.35);
+      wallDecor.fillRect(ws1.x - 54, ws1.y - 24, 40, 4);
+      wallDecor.fillRect(ws1.x - 54, ws1.y - 18, 70, 3);
+      wallDecor.fillRect(ws1.x - 54, ws1.y - 12, 58, 3);
       const ws2 = iso(0, 4);
       wallDecor.fillStyle(0xb89faa, 1);
       wallDecor.fillRoundedRect(ws2.x - 28, ws2.y - 52, 90, 44, 8);
       wallDecor.fillStyle(0x9fe9ff, 0.95);
       wallDecor.fillRoundedRect(ws2.x - 22, ws2.y - 46, 78, 32, 6);
+      wallDecor.fillStyle(0xffffff, 0.35);
+      wallDecor.fillRect(ws2.x - 16, ws2.y - 40, 24, 4);
+      wallDecor.fillRect(ws2.x - 16, ws2.y - 34, 50, 3);
 
       // Frames / paintings
       [[2, 0, PALETTE.pink], [6, 0, PALETTE.mint], [0, 6, PALETTE.lilac]].forEach(([tx, ty, color]) => {
@@ -221,6 +231,21 @@
       wallDecor.lineTo(board.x + 12, board.y - 11);
       wallDecor.strokePath();
       wallDecor.setDepth(80);
+
+      const ceilingSpots = this.add.graphics();
+      [[4, 2], [6, 2], [5, 4]].forEach(([tx, ty]) => {
+        const p = iso(tx, ty);
+        ceilingSpots.fillStyle(0xfff2da, 0.95);
+        ceilingSpots.fillCircle(p.x, p.y - 86, 6);
+        ceilingSpots.fillStyle(0xffd69a, 0.20);
+        ceilingSpots.beginPath();
+        ceilingSpots.moveTo(p.x, p.y - 82);
+        ceilingSpots.lineTo(p.x + 52, p.y + 6);
+        ceilingSpots.lineTo(p.x - 52, p.y + 6);
+        ceilingSpots.closePath();
+        ceilingSpots.fillPath();
+      });
+      ceilingSpots.setDepth(92);
 
       /* ── DESKS (6 workstations) ──────────────────────────── */
       const DESK_TILES = [
@@ -271,10 +296,12 @@
 
       /* ── Lounge sofas + coffee table ─────────────────────── */
       const lounge = this.add.graphics();
-      [[3, 5], [4, 5], [5, 5]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 14, PALETTE.pink, 0xe9bfd0, 0xf3c9da));
-      [[3, 6], [4, 6], [5, 6]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 25, 0xf2bfd3, 0xe3aebf, 0xeeb8ca));
-      [[6, 4], [7, 4]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 14, PALETTE.mint, 0xbfead4, 0xcaf0dc));
-      [[6, 5], [7, 5]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 25, 0xc6f0da, 0xb2dfc7, 0xbde8d0));
+      [[1, 6], [2, 6], [3, 6]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 14, PALETTE.pink, 0xe9bfd0, 0xf3c9da));
+      [[1, 7], [2, 7], [3, 7]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 25, 0xf2bfd3, 0xe3aebf, 0xeeb8ca));
+      [[7, 6], [8, 6]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 14, PALETTE.mint, 0xbfead4, 0xcaf0dc));
+      [[7, 7], [8, 7]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 25, 0xc6f0da, 0xb2dfc7, 0xbde8d0));
+      this._box(lounge, 4, 4, 15, PALETTE.lilac, 0xd5c0e9, 0xe1cef0);
+      this._box(lounge, 7, 3, 15, PALETTE.lilac, 0xd5c0e9, 0xe1cef0);
       this._box(lounge, 5, 3, 12, PALETTE.beige, 0xe6cfb3, 0xefdac1);
       this._box(lounge, 6, 3, 12, PALETTE.beige, 0xe6cfb3, 0xefdac1);
       const coffee = iso(5, 3);
@@ -282,7 +309,9 @@
       lounge.fillCircle(coffee.x + 10, coffee.y - 6, 5);
       lounge.fillStyle(0xffd4e5, 0.92);
       lounge.fillCircle(coffee.x - 6, coffee.y - 4, 4);
-      lounge.setDepth(iso(5, 6).y + 70);
+      lounge.fillStyle(0xd5f5e3, 0.88);
+      lounge.fillCircle(coffee.x + 2, coffee.y - 7, 3);
+      lounge.setDepth(iso(6, 7).y + 70);
 
       /* ── Stands, bookshelf, and floor lamps ──────────────── */
       const furniture = this.add.graphics();
@@ -310,6 +339,8 @@
         furniture.lineTo(p.x - 38, p.y + 4);
         furniture.closePath();
         furniture.fillPath();
+        furniture.fillStyle(0xffffff, 0.16);
+        furniture.fillCircle(p.x, p.y - 56, 4);
       });
       furniture.setDepth(95);
 
@@ -437,7 +468,7 @@
         const cy = py - DESK_H;
 
         const container = this.add.container(cx, cy);
-        container.setScale(1.12);
+        container.setScale(1.2);
         container.setDepth(py + TH + 10);
 
         // Character (local origin = feet at 0,0)
@@ -446,16 +477,16 @@
         container.add(charG);
 
         // Status indicator (larger halo + dot)
-        const halo = this.add.circle(20, -62, 11, 0xffffff, 0.18);
+        const halo = this.add.circle(20, -62, 13, 0xffffff, 0.2);
         container.add(halo);
-        const dot = this.add.circle(20, -62, 7, 0x8ea1bc);
+        const dot = this.add.circle(20, -62, 8, 0x8ea1bc);
         container.add(dot);
 
         // Name label
         const hexCol = "#" + cfg.color.toString(16).padStart(6, "0");
-        const label = this.add.text(0, -64, cfg.label, {
+        const label = this.add.text(0, -66, cfg.label, {
           fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
-          fontSize:   "13px",
+          fontSize:   "14px",
           fontStyle:  "bold",
           color:       hexCol,
           stroke:      "#000000",
@@ -552,14 +583,14 @@
         if (mode === "working") {
           const pulse = 0.55 + Math.sin(time / 260) * 0.45;
           view.dot.setFillStyle(0x53e7a2, 1);
-          view.halo.setFillStyle(0x53e7a2, 0.18 + pulse * 0.25);
-          view.halo.setScale(1 + pulse * 0.22);
+          view.halo.setFillStyle(0x53e7a2, 0.2 + pulse * 0.28);
+          view.halo.setScale(1 + pulse * 0.28);
           view.bubbleBg.setVisible(true);
           view.bubbleTxt.setVisible(true);
         } else if (mode === "hitl_wait") {
           view.dot.setFillStyle(0xffaf4d, 1);
-          view.halo.setFillStyle(0xffaf4d, 0.30);
-          view.halo.setScale(1.08);
+          view.halo.setFillStyle(0xffaf4d, 0.34);
+          view.halo.setScale(1.14);
           view.bubbleBg.setVisible(false);
           view.bubbleTxt.setVisible(false);
         } else {
