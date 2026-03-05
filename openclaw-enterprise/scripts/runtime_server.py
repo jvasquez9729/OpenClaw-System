@@ -150,6 +150,30 @@ def _openclaw_base_url() -> str:
     return _get_setting("OPENCLAW_BASE_URL", "openclaw_base_url", "http://127.0.0.1:8000").rstrip("/")
 
 
+def _openclaw_base_candidates() -> list[str]:
+    env_list = os.getenv("OPENCLAW_BASE_URLS", "").strip()
+    if env_list:
+        parsed = [x.strip().rstrip("/") for x in env_list.split(",") if x.strip()]
+    else:
+        parsed = []
+
+    cfg_list: list[str] = []
+    raw_cfg = CONFIG.get("openclaw_base_urls")
+    if isinstance(raw_cfg, list):
+        cfg_list = [str(x).strip().rstrip("/") for x in raw_cfg if str(x).strip()]
+
+    # Orden: variable dedicada -> config list -> base individual -> defaults conocidos.
+    ordered = parsed + cfg_list + [_openclaw_base_url(), "http://127.0.0.1:3000", "http://127.0.0.1:8000"]
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in ordered:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
+
+
 def _ollama_base_url() -> str:
     return _get_setting("OLLAMA_BASE_URL", "ollama_base_url", "http://127.0.0.1:11434").rstrip("/")
 
@@ -374,15 +398,25 @@ def _refresh_openapi_cache() -> None:
     if (now - fetched_at) < _CACHE_TTL_SECONDS:
         return
 
-    base_url = _openclaw_base_url()
-    try:
-        payload = _http_json(method="GET", url=f"{base_url}/openapi.json", timeout=5)
-        paths = set((payload.get("paths") or {}).keys()) if isinstance(payload, dict) else set()
-        _OPENAPI_CACHE["paths"] = paths
-        _OPENAPI_CACHE["fetched_at"] = now
-    except Exception:
-        _OPENAPI_CACHE["paths"] = set()
-        _OPENAPI_CACHE["fetched_at"] = now
+    chosen_base = None
+    chosen_paths: set[str] = set()
+    for base_url in _openclaw_base_candidates():
+        try:
+            payload = _http_json(method="GET", url=f"{base_url}/openapi.json", timeout=5)
+            if not isinstance(payload, dict):
+                continue
+            paths = set((payload.get("paths") or {}).keys())
+            if not paths:
+                continue
+            chosen_base = base_url
+            chosen_paths = paths
+            break
+        except Exception:
+            continue
+
+    _OPENAPI_CACHE["base_url"] = chosen_base
+    _OPENAPI_CACHE["paths"] = chosen_paths
+    _OPENAPI_CACHE["fetched_at"] = now
 
 
 def _proxy_openclaw(
@@ -404,30 +438,38 @@ def _proxy_openclaw(
     ordered_paths.extend(candidates)
 
     seen: set[str] = set()
-    base_url = _openclaw_base_url()
+    base_urls = []
+    cached_base = _OPENAPI_CACHE.get("base_url")
+    if isinstance(cached_base, str) and cached_base.strip():
+        base_urls.append(cached_base.strip().rstrip("/"))
+    for candidate in _openclaw_base_candidates():
+        if candidate not in base_urls:
+            base_urls.append(candidate)
 
-    for path in ordered_paths:
-        if path in seen:
-            continue
-        seen.add(path)
-
-        final_path = path
-        for name, value in (path_params or {}).items():
-            final_path = final_path.replace(f"{{{name}}}", urllib_parse.quote(str(value)))
-        query = urllib_parse.urlencode({k: v for k, v in (query_params or {}).items() if v is not None})
-        url = f"{base_url}{final_path}"
-        if query:
-            url = f"{url}?{query}"
-
-        try:
-            return _http_json(method=method, url=url, payload=payload, timeout=20)
-        except urllib_error.HTTPError as exc:
-            if exc.code in (404, 405):
+    for base_url in base_urls:
+        for path in ordered_paths:
+            cache_key = f"{base_url}:{path}"
+            if cache_key in seen:
                 continue
-            logger.warning("Proxy OpenClaw fallo %s %s: HTTP %s", method, url, exc.code)
-            continue
-        except Exception:
-            continue
+            seen.add(cache_key)
+
+            final_path = path
+            for name, value in (path_params or {}).items():
+                final_path = final_path.replace(f"{{{name}}}", urllib_parse.quote(str(value)))
+            query = urllib_parse.urlencode({k: v for k, v in (query_params or {}).items() if v is not None})
+            url = f"{base_url}{final_path}"
+            if query:
+                url = f"{url}?{query}"
+
+            try:
+                return _http_json(method=method, url=url, payload=payload, timeout=20)
+            except urllib_error.HTTPError as exc:
+                if exc.code in (404, 405):
+                    continue
+                logger.warning("Proxy OpenClaw fallo %s %s: HTTP %s", method, url, exc.code)
+                continue
+            except Exception:
+                continue
     return None
 
 
@@ -770,7 +812,8 @@ def on_startup() -> None:
 def runtime_integration_status() -> dict[str, Any]:
     _refresh_openapi_cache()
     return {
-        "openclaw_base_url": _openclaw_base_url(),
+        "openclaw_base_url": _OPENAPI_CACHE.get("base_url") or _openclaw_base_url(),
+        "openclaw_base_candidates": _openclaw_base_candidates(),
         "ollama_base_url": _ollama_base_url(),
         "openclaw_paths_detected": sorted(list(_OPENAPI_CACHE.get("paths") or set())),
         "psycopg_available": psycopg is not None,

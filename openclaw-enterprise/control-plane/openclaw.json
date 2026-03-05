@@ -1,5 +1,9 @@
 {
-  "openclaw_base_url": "http://127.0.0.1:8000",
+  "openclaw_base_url": "http://127.0.0.1:3000",
+  "openclaw_base_urls": [
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8000"
+  ],
   "runtime_base_url": "http://127.0.0.1:8001",
   "ollama_base_url": "http://127.0.0.1:11434",
   "pg_host": "127.0.0.1",
