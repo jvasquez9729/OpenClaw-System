@@ -1,409 +1,480 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
-import os
-import uuid
 import json
-import urllib.request
-from dataclasses import dataclass, field
+import logging
+import os
+import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from time import perf_counter
-from typing import Literal
+from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
-import psycopg2
+import psycopg
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
-from starlette.responses import Response
+from pydantic import BaseModel, Field
 
 try:
-    from scripts.runtime_budget_guard import BudgetExceededError, BudgetGuard
-    from scripts.runtime_hash_chain import canonical_event_hash
-    from scripts.runtime_memory_store import MemoryStore
-    from scripts.runtime_policy_enforcer import PolicyEnforcer, ToolCall
-except ModuleNotFoundError:
-    from runtime_budget_guard import BudgetExceededError, BudgetGuard
-    from runtime_hash_chain import canonical_event_hash
-    from runtime_memory_store import MemoryStore
-    from runtime_policy_enforcer import PolicyEnforcer, ToolCall
+    import yaml
+except Exception:  # pragma: no cover - optional dependency fallback
+    yaml = None
 
 
-class ExecuteRequest(BaseModel):
-    task: str
-    domain: Literal["mem_finance", "mem_tech"] = "mem_finance"
-    agent_id: str = "chief_of_staff"
-    budget_key: str = "finance_analysis"
+logger = logging.getLogger("openclaw.runtime.chat")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+APP_ROOT = Path(__file__).resolve().parents[1]
+AGENT_CAPABILITIES_PATH = APP_ROOT / "policies" / "agent_capabilities.yaml"
+PROMPTS_DIR = APP_ROOT / "prompts"
+
+DEFAULT_AGENT_IDS = (
+    "chief_of_staff",
+    "financial_analyst",
+    "financial_parser",
+    "developer",
+    "code_reviewer",
+    "security_agent",
+)
+DEFAULT_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+CHAT_CONTEXT_LIMIT = int(os.getenv("CHAT_CONTEXT_LIMIT", "20"))
+
+SOURCE_UI = "ui"
+SOURCE_TELEGRAM = "telegram"
+VALID_SOURCES = {SOURCE_UI, SOURCE_TELEGRAM}
 
 
-class ApproveRequest(BaseModel):
-    execution_id: str
-    approved: bool = True
+class ChatRequest(BaseModel):
+    agent_id: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    source: str = Field(default=SOURCE_UI)
+    execution_id: str | None = None
 
 
-@dataclass
-class ExecutionState:
-    execution_id: str
-    task: str
-    agent_id: str
-    budget_key: str
-    domain: str
-    status: str = "HITL_WAIT"
-    summary: str = ""
-    approved: bool = False
-    cost_usd: float = 0.0
-    token_in: int = 0
-    token_out: int = 0
-    created_at: str = ""
-    updated_at: str = ""
-    events: list[str] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        if not self.created_at:
-            self.created_at = now
-        if not self.updated_at:
-            self.updated_at = now
+def _db_connect() -> psycopg.Connection:
+    return psycopg.connect(
+        host=os.getenv("PGHOST", "127.0.0.1"),
+        port=int(os.getenv("PGPORT", "5433")),
+        user=os.getenv("PGUSER", "aiadmin"),
+        password=os.getenv("PGPASSWORD", ""),
+        dbname=os.getenv("PGDATABASE", "openclaw"),
+        autocommit=False,
+    )
 
 
-NODE_LATENCY = Histogram("node_latency_seconds", "Latencia por nodo", ["node"])
-TOKENS_TOTAL = Counter("tokens_total", "Tokens consumidos", ["agent_id", "direction"])
-COST_TOTAL = Counter("cost_usd_total", "Costo acumulado", ["agent_id"])
-REJECTIONS_TOTAL = Counter("execution_rejections_total", "Ejecuciones rechazadas", ["reason"])
+def ensure_chat_table() -> None:
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE SCHEMA IF NOT EXISTS mem_audit;")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mem_audit.chat_messages (
+                  id BIGSERIAL PRIMARY KEY,
+                  agent_id TEXT NOT NULL,
+                  role TEXT NOT NULL,
+                  content TEXT NOT NULL,
+                  source TEXT NOT NULL DEFAULT 'ui',
+                  execution_id TEXT,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_created_at
+                ON mem_audit.chat_messages(agent_id, created_at DESC);
+                """
+            )
+        conn.commit()
 
-app = FastAPI(title="OpenClaw Runtime API", version="0.2.0")
 
+def _extract_agent_mapping(raw_data: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw_data, dict):
+        return {}
+
+    root: Any = raw_data
+    if isinstance(raw_data.get("agents"), dict):
+        root = raw_data["agents"]
+    elif isinstance(raw_data.get("agent_capabilities"), dict):
+        root = raw_data["agent_capabilities"]
+    elif isinstance(raw_data.get("capabilities"), dict):
+        root = raw_data["capabilities"]
+
+    out: dict[str, dict[str, Any]] = {}
+    if isinstance(root, dict):
+        for agent_id, cfg in root.items():
+            if not isinstance(agent_id, str):
+                continue
+            out[agent_id] = cfg if isinstance(cfg, dict) else {}
+    return out
+
+
+def _fallback_parse_capabilities(path: Path) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    out: dict[str, dict[str, Any]] = {}
+    current_agent: str | None = None
+    in_agents_block = False
+
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+
+        top_match = re.match(r"^([a-zA-Z0-9_\-]+):\s*$", line)
+        if top_match and line == line.lstrip():
+            key = top_match.group(1)
+            if key in {"agents", "agent_capabilities", "capabilities"}:
+                in_agents_block = True
+                current_agent = None
+                continue
+            if not in_agents_block:
+                current_agent = key
+                out.setdefault(current_agent, {})
+                continue
+
+        nested_agent = re.match(r"^\s{2}([a-zA-Z0-9_\-]+):\s*$", line)
+        if in_agents_block and nested_agent:
+            current_agent = nested_agent.group(1)
+            out.setdefault(current_agent, {})
+            continue
+
+        if current_agent:
+            kv = re.match(r"^\s{2,}([a-zA-Z0-9_\-]+):\s*(.+?)\s*$", line)
+            if kv:
+                k, v = kv.groups()
+                out[current_agent][k] = v.strip("'\"")
+    return out
+
+
+def load_agent_capabilities() -> dict[str, dict[str, Any]]:
+    parsed: dict[str, dict[str, Any]] = {}
+    if AGENT_CAPABILITIES_PATH.exists():
+        if yaml is not None:
+            try:
+                with AGENT_CAPABILITIES_PATH.open("r", encoding="utf-8") as f:
+                    parsed = _extract_agent_mapping(yaml.safe_load(f) or {})
+            except Exception as exc:
+                logger.warning("No se pudo parsear agent_capabilities.yaml con PyYAML: %s", exc)
+        if not parsed:
+            parsed = _fallback_parse_capabilities(AGENT_CAPABILITIES_PATH)
+
+    for agent_id in DEFAULT_AGENT_IDS:
+        parsed.setdefault(agent_id, {})
+    return parsed
+
+
+def _resolve_agent_model(agent_cfg: dict[str, Any]) -> str:
+    for key in ("model", "ollama_model", "llm_model", "default_model"):
+        value = agent_cfg.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return DEFAULT_OLLAMA_MODEL
+
+
+def _resolve_prompt(agent_id: str, agent_cfg: dict[str, Any]) -> str:
+    for key in ("system_prompt", "prompt", "instructions"):
+        value = agent_cfg.get(key)
+        if isinstance(value, str) and value.strip():
+            trimmed = value.strip()
+            # Si contiene saltos de línea asumimos prompt inline.
+            if "\n" in trimmed:
+                return trimmed
+            # Si apunta a archivo, intentamos cargarlo.
+            possible_path = (APP_ROOT / trimmed).resolve() if not Path(trimmed).is_absolute() else Path(trimmed)
+            if possible_path.exists():
+                return possible_path.read_text(encoding="utf-8")
+
+    for key in ("prompt_file", "system_prompt_file", "prompt_path"):
+        value = agent_cfg.get(key)
+        if isinstance(value, str) and value.strip():
+            possible_path = (APP_ROOT / value.strip()).resolve() if not Path(value).is_absolute() else Path(value)
+            if possible_path.exists():
+                return possible_path.read_text(encoding="utf-8")
+
+    for candidate in (
+        PROMPTS_DIR / f"{agent_id}.md",
+        PROMPTS_DIR / f"{agent_id.replace('_', '-')}.md",
+    ):
+        if candidate.exists():
+            return candidate.read_text(encoding="utf-8")
+
+    return (
+        f"You are OpenClaw agent '{agent_id}'. "
+        "Follow user instructions safely and provide concise, actionable answers."
+    )
+
+
+def _to_iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
+def _agent_row_sort_key(item: dict[str, Any]) -> tuple[int, float, str]:
+    ts = item.get("last_message_at")
+    if not ts:
+        return (1, 0.0, str(item.get("agent_id") or ""))
+    try:
+        parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        return (0, -parsed.timestamp(), str(item.get("agent_id") or ""))
+    except ValueError:
+        return (0, 0.0, str(item.get("agent_id") or ""))
+
+
+def fetch_chat_history(agent_id: str, limit: int) -> list[dict[str, Any]]:
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, agent_id, role, content, source, execution_id, created_at
+                FROM mem_audit.chat_messages
+                WHERE agent_id = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+                """,
+                (agent_id, limit),
+            )
+            rows = cur.fetchall()
+
+    # Mantener orden cronológico ascendente para rendering de chat.
+    rows.reverse()
+    return [
+        {
+            "id": row[0],
+            "agent_id": row[1],
+            "role": row[2],
+            "content": row[3],
+            "source": row[4],
+            "execution_id": row[5],
+            "created_at": _to_iso(row[6]),
+        }
+        for row in rows
+    ]
+
+
+def insert_chat_message(
+    *,
+    agent_id: str,
+    role: str,
+    content: str,
+    source: str,
+    execution_id: str | None,
+) -> dict[str, Any]:
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mem_audit.chat_messages (agent_id, role, content, source, execution_id)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, created_at
+                """,
+                (agent_id, role, content, source, execution_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    return {
+        "id": row[0],
+        "agent_id": agent_id,
+        "role": role,
+        "content": content,
+        "source": source,
+        "execution_id": execution_id,
+        "created_at": _to_iso(row[1]),
+    }
+
+
+def call_ollama_chat(*, model: str, messages: list[dict[str, str]]) -> str:
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+    payload = {"model": model, "messages": messages, "stream": False}
+    req = urllib_request.Request(
+        f"{base_url}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=120) as response:
+            raw = response.read().decode("utf-8")
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Ollama HTTP {exc.code}: {detail[:400]}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"No se pudo conectar a Ollama: {exc}") from exc
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=502, detail="Respuesta inválida desde Ollama") from exc
+
+    content = (
+        (parsed.get("message") or {}).get("content")
+        or parsed.get("response")
+        or ""
+    )
+    if not isinstance(content, str) or not content.strip():
+        raise HTTPException(status_code=502, detail="Ollama no devolvió contenido")
+    return content.strip()
+
+
+app = FastAPI(title="OpenClaw Runtime Server", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-states: dict[str, ExecutionState] = {}
-budget_guard = BudgetGuard()
-policy = PolicyEnforcer()
-memory = MemoryStore()
 
-
-def _db_url() -> str:
-    url = os.getenv("OPENCLAW_DB_URL", "").strip()
-    if url:
-        return url
-    env_file = Path.home() / "apps" / ".env.production"
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            if line.startswith("OPENCLAW_DB_URL="):
-                return line.split("=", 1)[1].strip()
-    raise RuntimeError("OPENCLAW_DB_URL no configurado")
-
-
-def _append_ledger_event(state: ExecutionState, node: str, status: str) -> None:
-    db_url = _db_url()
-    output_hash = canonical_event_hash(
-        state.execution_id, state.agent_id, node, state.summary or state.task, None, "sha256"
-    )
-    with psycopg2.connect(db_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT event_hash FROM mem_audit.execution_ledger
-                WHERE execution_id = %s
-                ORDER BY event_id DESC
-                LIMIT 1
-                """,
-                (state.execution_id,),
-            )
-            row = cur.fetchone()
-            prev_hash = row[0] if row else None
-            event_hash = canonical_event_hash(
-                state.execution_id, state.agent_id, node, output_hash, prev_hash, "sha256"
-            )
-            cur.execute(
-                """
-                INSERT INTO mem_audit.execution_ledger
-                (execution_id, agent_id, model_id, state, input_hash, output_hash,
-                 prev_event_hash, event_hash, token_in, token_out, cost_usd, status)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """,
-                (
-                    state.execution_id,
-                    state.agent_id,
-                    "runtime-http-mvp",
-                    node,
-                    canonical_event_hash(state.execution_id, state.agent_id, "input", state.task, None),
-                    output_hash,
-                    prev_hash,
-                    event_hash,
-                    state.token_in,
-                    state.token_out,
-                    state.cost_usd,
-                    status,
-                ),
-            )
-
-
-def _notify_n8n(event_type: str, state: ExecutionState) -> None:
-    url = os.getenv("N8N_RUNTIME_EVENTS_WEBHOOK", "").strip()
-    if not url:
-        return
-    payload = {
-        "event_type": event_type,
-        "execution_id": state.execution_id,
-        "status": state.status,
-        "agent_id": state.agent_id,
-        "domain": state.domain,
-        "summary": state.summary,
-        "cost_usd": state.cost_usd,
-        "token_in": state.token_in,
-        "token_out": state.token_out,
-    }
+@app.on_event("startup")
+def on_startup() -> None:
     try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        ensure_chat_table()
+        logger.info("Tabla mem_audit.chat_messages lista")
+    except Exception as exc:  # pragma: no cover - startup guard
+        logger.exception("Error inicializando tabla de chat: %s", exc)
+
+
+@app.get("/runtime/chat/history/{agent_id}")
+def get_chat_history(
+    agent_id: str,
+    limit: int = Query(default=50, ge=1, le=500),
+) -> dict[str, Any]:
+    try:
+        ensure_chat_table()
+        items = fetch_chat_history(agent_id=agent_id, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error leyendo historial: {exc}") from exc
+    return {"agent_id": agent_id, "items": items}
+
+
+@app.get("/runtime/chat/agents")
+def get_chat_agents() -> dict[str, Any]:
+    try:
+        ensure_chat_table()
+        capabilities = load_agent_capabilities()
+
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (agent_id)
+                        agent_id, role, content, source, execution_id, created_at
+                    FROM mem_audit.chat_messages
+                    ORDER BY agent_id, created_at DESC, id DESC
+                    """
+                )
+                latest_rows = cur.fetchall()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error listando agentes: {exc}") from exc
+
+    latest_by_agent: dict[str, dict[str, Any]] = {}
+    for row in latest_rows:
+        latest_by_agent[row[0]] = {
+            "role": row[1],
+            "content": row[2],
+            "source": row[3],
+            "execution_id": row[4],
+            "created_at": _to_iso(row[5]),
+        }
+
+    all_ids = sorted(set(capabilities.keys()) | set(latest_by_agent.keys()))
+    items: list[dict[str, Any]] = []
+    for agent_id in all_ids:
+        cfg = capabilities.get(agent_id, {})
+        model = _resolve_agent_model(cfg)
+        latest = latest_by_agent.get(agent_id)
+        items.append(
+            {
+                "agent_id": agent_id,
+                "model": model,
+                "last_message": latest,
+                "last_message_at": latest.get("created_at") if latest else None,
+            }
         )
-        with urllib.request.urlopen(req, timeout=10):  # nosec B310
-            pass
-    except Exception:
-        return
+
+    items.sort(key=_agent_row_sort_key)
+    return {"items": items}
 
 
-def _run_execution(state: ExecutionState) -> ExecutionState:
-    t0 = perf_counter()
-    policy.check_tool_allowed(ToolCall(agent_id=state.agent_id, tool_name="decompose_task", scope="workflow_action"))
-    NODE_LATENCY.labels("decomposition").observe(perf_counter() - t0)
+@app.post("/runtime/chat")
+def post_chat(payload: ChatRequest) -> dict[str, Any]:
+    agent_id = payload.agent_id.strip()
+    message = payload.message.strip()
+    source = payload.source.strip().lower() if payload.source else SOURCE_UI
 
-    est_cost = 0.05
-    est_token_in = 300
-    est_token_out = 700
-    state.cost_usd = budget_guard.add_cost(state.execution_id, state.budget_key, est_cost)
-    state.token_in += est_token_in
-    state.token_out += est_token_out
-    TOKENS_TOTAL.labels(state.agent_id, "in").inc(est_token_in)
-    TOKENS_TOTAL.labels(state.agent_id, "out").inc(est_token_out)
-    COST_TOTAL.labels(state.agent_id).inc(est_cost)
+    if source not in VALID_SOURCES:
+        raise HTTPException(status_code=400, detail="source debe ser 'ui' o 'telegram'")
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id requerido")
+    if not message:
+        raise HTTPException(status_code=400, detail="message requerido")
 
-    ctx = memory.retrieve_context(state.domain, state.task, k=5)
-    state.summary = f"MVP summary for task='{state.task}' context_items={len(ctx)}"
-    memory.save_execution_artifact(
-        domain=state.domain,
-        text=state.summary,
-        metadata={"execution_id": state.execution_id, "agent_id": state.agent_id},
-    )
-    state.status = "HITL_WAIT"
-    state.updated_at = datetime.now(timezone.utc).isoformat()
-    _append_ledger_event(state, node="EXEC_SUMMARY", status="pending_approval")
-    _notify_n8n("execution.waiting_approval", state)
-    return state
+    execution_id = payload.execution_id or str(uuid.uuid4())
+    capabilities = load_agent_capabilities()
+    agent_cfg = capabilities.get(agent_id, {})
+    model = _resolve_agent_model(agent_cfg)
+    system_prompt = _resolve_prompt(agent_id, agent_cfg)
 
-
-# ── Existing endpoints ────────────────────────────────────────────
-
-
-@app.post("/runtime/execute")
-def runtime_execute(req: ExecuteRequest):
-    execution_id = f"exec-{uuid.uuid4().hex[:10]}"
-    state = ExecutionState(
-        execution_id=execution_id,
-        task=req.task,
-        agent_id=req.agent_id,
-        budget_key=req.budget_key,
-        domain=req.domain,
-    )
     try:
-        states[execution_id] = _run_execution(state)
-        return {"execution_id": execution_id, "status": states[execution_id].status}
-    except PermissionError as e:
-        REJECTIONS_TOTAL.labels("policy_denied").inc()
-        raise HTTPException(status_code=403, detail=str(e))
-    except BudgetExceededError as e:
-        REJECTIONS_TOTAL.labels("budget_exceeded").inc()
-        raise HTTPException(status_code=402, detail=str(e))
-    except Exception as e:
-        REJECTIONS_TOTAL.labels("runtime_error").inc()
-        raise HTTPException(status_code=500, detail=str(e))
+        ensure_chat_table()
+        user_row = insert_chat_message(
+            agent_id=agent_id,
+            role="user",
+            content=message,
+            source=source,
+            execution_id=execution_id,
+        )
+        history_rows = fetch_chat_history(agent_id=agent_id, limit=CHAT_CONTEXT_LIMIT)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error persistiendo mensaje: {exc}") from exc
 
+    messages_for_model: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    for row in history_rows:
+        role = row["role"]
+        if role not in {"user", "assistant"}:
+            continue
+        messages_for_model.append({"role": role, "content": row["content"]})
 
-@app.post("/runtime/approve")
-def runtime_approve(req: ApproveRequest):
-    state = states.get(req.execution_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="execution_id no encontrado")
-    if not req.approved:
-        state.status = "REJECTED"
-        state.updated_at = datetime.now(timezone.utc).isoformat()
-        _append_ledger_event(state, node="HITL_WAIT", status="rejected")
-        _notify_n8n("execution.rejected", state)
-        return {"execution_id": state.execution_id, "status": state.status}
+    assistant_text = call_ollama_chat(model=model, messages=messages_for_model)
 
-    state.approved = True
-    state.status = "DONE"
-    state.updated_at = datetime.now(timezone.utc).isoformat()
-    _append_ledger_event(state, node="HITL_WAIT", status="approved")
-    _notify_n8n("execution.done", state)
-    return {"execution_id": state.execution_id, "status": state.status}
+    try:
+        assistant_row = insert_chat_message(
+            agent_id=agent_id,
+            role="assistant",
+            content=assistant_text,
+            source=source,
+            execution_id=execution_id,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error guardando respuesta: {exc}") from exc
 
-
-@app.post("/runtime/reject")
-def runtime_reject(req: ApproveRequest):
-    state = states.get(req.execution_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="execution_id no encontrado")
-    state.status = "REJECTED"
-    state.updated_at = datetime.now(timezone.utc).isoformat()
-    _append_ledger_event(state, node="HITL_WAIT", status="rejected")
-    _notify_n8n("execution.rejected", state)
-    return {"execution_id": state.execution_id, "status": state.status}
-
-
-@app.post("/runtime/events")
-def runtime_events(payload: dict):
-    execution_id = payload.get("execution_id", "")
-    if execution_id and execution_id in states:
-        states[execution_id].events.append(str(payload))
-    return {"ok": True}
-
-
-@app.get("/runtime/status/{execution_id}")
-def runtime_status(execution_id: str):
-    state = states.get(execution_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="execution_id no encontrado")
     return {
-        "execution_id": state.execution_id,
-        "status": state.status,
-        "approved": state.approved,
-        "cost_usd": state.cost_usd,
-        "token_in": state.token_in,
-        "token_out": state.token_out,
-        "agent_id": state.agent_id,
-        "task": state.task,
-        "summary": state.summary,
-        "domain": state.domain,
-        "created_at": state.created_at,
-        "updated_at": state.updated_at,
+        "agent_id": agent_id,
+        "execution_id": execution_id,
+        "model": model,
+        "source": source,
+        "response": assistant_text,
+        "user_message": user_row,
+        "assistant_message": assistant_row,
     }
 
 
-@app.get("/metrics")
-def metrics():
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+if __name__ == "__main__":
+    import uvicorn
 
-
-# ── New endpoints for Mission Control UI ──────────────────────────
-
-
-@app.get("/runtime/agents/state")
-def runtime_agents_state():
-    """Returns current state of all known agents based on active executions."""
-    agent_map: dict[str, dict] = {}
-
-    for s in states.values():
-        aid = s.agent_id
-        status = s.status.lower()
-        prev = agent_map.get(aid, {}).get("state", "idle")
-
-        if status == "hitl_wait":
-            mode = "hitl_wait"
-        elif status in ("execution", "decomposition", "validation", "audit", "consolidation", "exec_summary"):
-            mode = "working"
-        elif status == "done" or status == "rejected":
-            mode = "idle"
-        else:
-            mode = "idle"
-
-        if mode == "hitl_wait" or (mode == "working" and prev != "hitl_wait"):
-            agent_map[aid] = {
-                "agent_id": aid,
-                "state": mode,
-                "cost_usd": s.cost_usd,
-                "token_in": s.token_in,
-                "token_out": s.token_out,
-                "last_execution_id": s.execution_id,
-            }
-        elif aid not in agent_map:
-            agent_map[aid] = {
-                "agent_id": aid,
-                "state": mode,
-                "cost_usd": s.cost_usd,
-                "token_in": s.token_in,
-                "token_out": s.token_out,
-                "last_execution_id": s.execution_id,
-            }
-
-    known_agents = list(policy._policies.keys())
-    for aid in known_agents:
-        if aid not in agent_map:
-            agent_map[aid] = {
-                "agent_id": aid,
-                "state": "idle",
-                "cost_usd": 0,
-                "token_in": 0,
-                "token_out": 0,
-                "last_execution_id": None,
-            }
-
-    return {"items": list(agent_map.values())}
-
-
-@app.get("/runtime/permission/stats")
-def runtime_permission_stats():
-    """Returns aggregate permission/token stats."""
-    total_tokens_in = sum(s.token_in for s in states.values())
-    total_tokens_out = sum(s.token_out for s in states.values())
-    active_count = sum(1 for s in states.values() if s.status not in ("DONE", "REJECTED"))
-    return {
-        "active_tokens": total_tokens_in + total_tokens_out,
-        "active_executions": active_count,
-        "total_executions": len(states),
-    }
-
-
-@app.get("/runtime/permission/recent")
-def runtime_permission_recent(limit: int = Query(default=120, ge=1, le=500)):
-    """Returns recent permission events derived from in-memory executions and DB ledger."""
-    items = []
-    for s in sorted(states.values(), key=lambda x: x.updated_at, reverse=True)[:limit]:
-        items.append({
-            "token_id": s.execution_id,
-            "execution_id": s.execution_id,
-            "agent_id": s.agent_id,
-            "status": s.status,
-            "action": "execute",
-            "reason": s.summary or s.task,
-            "decision_reason": s.summary or s.task,
-            "timestamp": s.updated_at,
-            "created_at": s.created_at,
-            "cost_usd": s.cost_usd,
-        })
-    return {"items": items}
-
-
-@app.get("/runtime/executions")
-def runtime_executions(limit: int = Query(default=60, ge=1, le=500)):
-    """Returns list of all executions for the Missions kanban."""
-    items = []
-    for s in sorted(states.values(), key=lambda x: x.updated_at, reverse=True)[:limit]:
-        items.append({
-            "execution_id": s.execution_id,
-            "status": s.status,
-            "state": s.status,
-            "agent_id": s.agent_id,
-            "title": s.task,
-            "task": s.task,
-            "description": s.summary,
-            "summary": s.summary,
-            "domain": s.domain,
-            "budget_key": s.budget_key,
-            "cost_usd": s.cost_usd,
-            "token_in": s.token_in,
-            "token_out": s.token_out,
-            "approved": s.approved,
-            "created_at": s.created_at,
-            "updated_at": s.updated_at,
-        })
-    return {"items": items}
+    uvicorn.run(
+        app,
+        host=os.getenv("RUNTIME_HOST", "0.0.0.0"),
+        port=int(os.getenv("RUNTIME_PORT", "8001")),
+        reload=False,
+    )

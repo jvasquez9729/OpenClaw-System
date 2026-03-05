@@ -1,11 +1,12 @@
-﻿(() => {
-  const routes = ["home", "missions", "agents", "events", "analytics", "settings"];
+(() => {
+  const routes = ["home", "chat", "stage", "gallery", "missions", "agents", "events", "analytics", "settings"];
 
   const apiBaseInput = document.getElementById("apiBase");
   const saveApiBtn = document.getElementById("saveApi");
   const apiStatus = document.getElementById("apiStatus");
   const pageTitle = document.getElementById("pageTitle");
   const pageSub = document.getElementById("pageSub");
+  const themeToggleBtn = document.getElementById("themeToggle");
   const navLinks = [...document.querySelectorAll(".nav a[data-route]")];
 
   const workingCountEl = document.getElementById("workingCount");
@@ -22,15 +23,35 @@
   const settingsApiBase = document.getElementById("settingsApiBase");
   const settingsPollMs = document.getElementById("settingsPollMs");
   const saveSettings = document.getElementById("saveSettings");
+  const conversationListEl = document.getElementById("conversationList");
+  const chatMessagesEl = document.getElementById("chatMessages");
+  const chatThreadTitleEl = document.getElementById("chatThreadTitle");
+  const chatThreadSubEl = document.getElementById("chatThreadSub");
+  const chatInputEl = document.getElementById("chatInput");
+  const chatSendBtn = document.getElementById("chatSend");
 
   const trackExecutionIdInput = document.getElementById("trackExecutionId");
   const addTrackExecutionBtn = document.getElementById("addTrackExecution");
   const clearTrackExecutionsBtn = document.getElementById("clearTrackExecutions");
 
   const officeCanvas = document.getElementById("office");
+  const AGENT_META = {
+    chief_of_staff: { emoji: "🧠", color: "#ff7d5f", label: "Chief of Staff" },
+    developer: { emoji: "🛠️", color: "#3cc9ff", label: "Developer" },
+    code_reviewer: { emoji: "🧪", color: "#9cfa6b", label: "Code Reviewer" },
+    security_agent: { emoji: "🛡️", color: "#ffc857", label: "Security Agent" },
+    financial_analyst: { emoji: "💸", color: "#c59dff", label: "Financial Analyst" },
+    financial_parser: { emoji: "📊", color: "#49e1b8", label: "Financial Parser" },
+    fullstack_builder: { emoji: "🛠️", color: "#3cc9ff", label: "Fullstack Builder" },
+    security_auditor: { emoji: "🛡️", color: "#ffc857", label: "Security Auditor" },
+    finance_specialist: { emoji: "💸", color: "#c59dff", label: "Finance Specialist" },
+    devops_engineer: { emoji: "☁️", color: "#49e1b8", label: "DevOps Engineer" },
+    system: { emoji: "📡", color: "#91a0b8", label: "System" },
+    operator: { emoji: "🧑‍🚀", color: "#ffb45e", label: "Operator" },
+  };
 
   const state = {
-    base: localStorage.getItem("apiBase") || apiBaseInput.value || "http://127.0.0.1:19000",
+    base: localStorage.getItem("apiBase") || apiBaseInput.value || "http://127.0.0.1:8001",
     pollMs: Number(localStorage.getItem("pollMs") || "1000"),
     online: false,
     agents: [],
@@ -41,13 +62,21 @@
     pollTimer: null,
     phaserGame: null,
     metrics: {},
+    theme: localStorage.getItem("themeMode") || "dark",
+    selectedConversation: localStorage.getItem("selectedConversation") || "chief_of_staff",
+    localMessages: {},
+    chatHistory: {},
+    chatAgents: [],
     trackedExecutionIds: (() => { try { const raw = localStorage.getItem("trackedExecutionIds"); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? [...new Set(arr.map((x) => String(x || "").trim()).filter(Boolean))] : []; } catch { return []; } })(),
-    apiCaps: { permissionStats: true, agentsState: true, permissionRecent: true, executions: true, runtimeStatus: false, metrics: false, runtimeApprove: false, runtimeReject: false },
+    chatPollMs: 3000,
+    chatPollTimer: null,
+    apiCaps: { permissionStats: true, agentsState: true, permissionRecent: true, executions: true, runtimeStatus: false, metrics: false, runtimeApprove: false, runtimeReject: false, runtimeChat: true, runtimeChatHistory: true, runtimeChatAgents: true },
   };
 
   apiBaseInput.value = state.base;
   if (settingsApiBase) settingsApiBase.value = state.base;
   if (settingsPollMs) settingsPollMs.value = String(state.pollMs);
+  applyTheme(state.theme);
 
   window.agentState = { agents: [], stats: {} };
 
@@ -66,6 +95,19 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return String(value);
     return date.toLocaleTimeString();
+  }
+
+  function getAgentMeta(agentId) {
+    const key = String(agentId || "system");
+    return AGENT_META[key] || { emoji: "🤖", color: "#8fb0ff", label: key.replace(/_/g, " ") };
+  }
+
+  function applyTheme(theme) {
+    const mode = theme === "light" ? "light" : "dark";
+    state.theme = mode;
+    document.body.classList.toggle("light-theme", mode === "light");
+    localStorage.setItem("themeMode", mode);
+    if (themeToggleBtn) themeToggleBtn.textContent = mode === "light" ? "🌙" : "🌗";
   }
 
   function setOnline(ok) {
@@ -100,6 +142,48 @@
     return response.text();
   }
 
+  async function fetchChatAgents() {
+    if (!state.apiCaps.runtimeChatAgents) return;
+    try {
+      const response = await fetchJson(api("/runtime/chat/agents"));
+      state.chatAgents = Array.isArray(response?.items) ? response.items : [];
+    } catch (err) {
+      if (String(err?.message || "").startsWith("404")) {
+        state.apiCaps.runtimeChatAgents = false;
+        state.apiCaps.runtimeChat = false;
+      } else {
+        console.error(err);
+      }
+      state.chatAgents = [];
+    }
+  }
+
+  async function fetchChatHistory(agentId, limit = 50) {
+    const id = String(agentId || "").trim();
+    if (!id || !state.apiCaps.runtimeChatHistory) return;
+    try {
+      const response = await fetchJson(api(`/runtime/chat/history/${encodeURIComponent(id)}?limit=${Number(limit) || 50}`));
+      state.chatHistory[id] = Array.isArray(response?.items) ? response.items : [];
+    } catch (err) {
+      if (String(err?.message || "").startsWith("404")) {
+        state.apiCaps.runtimeChatHistory = false;
+        state.apiCaps.runtimeChat = false;
+      } else {
+        console.error(err);
+      }
+      state.chatHistory[id] = [];
+    }
+  }
+
+  async function refreshChatData(agentId = state.selectedConversation) {
+    if (!state.apiCaps.runtimeChat) return;
+    const id = String(agentId || "chief_of_staff");
+    await Promise.all([
+      fetchChatAgents(),
+      fetchChatHistory(id, 50),
+    ]);
+  }
+
   function addTrackedExecutionId(id) {
     const value = String(id || "").trim();
     if (!value) return false;
@@ -116,6 +200,9 @@
     state.apiCaps.metrics = Boolean(paths["/metrics"]?.get);
     state.apiCaps.runtimeApprove = Boolean(paths["/runtime/approve"]?.post);
     state.apiCaps.runtimeReject = Boolean(paths["/runtime/reject"]?.post);
+    state.apiCaps.runtimeChat = Boolean(paths["/runtime/chat"]?.post);
+    state.apiCaps.runtimeChatHistory = Boolean(paths["/runtime/chat/history/{agent_id}"]?.get);
+    state.apiCaps.runtimeChatAgents = Boolean(paths["/runtime/chat/agents"]?.get);
   }
 
   function parsePromMetrics(text) {
@@ -220,7 +307,14 @@
     badgeBar.innerHTML = state.agents.map((a) => {
       const status = String(a.state || "idle").toLowerCase();
       const cls = status === "working" ? "badge ok" : (status.includes("hitl") ? "badge warn" : "badge neutral");
-      return `<span class="${cls}">${esc(a.agent_id)} <span class="muted">${esc(status)}</span></span>`;
+      const meta = getAgentMeta(a.agent_id);
+      return `
+        <span class="${cls}">
+          <span class="avatar" style="background:${esc(meta.color)}">${esc(meta.emoji)}</span>
+          ${esc(meta.label)}
+          <span class="muted">${esc(status)}</span>
+        </span>
+      `;
     }).join("");
   }
 
@@ -331,6 +425,163 @@
     }).join("");
 
     eventsLogEl.scrollTop = eventsLogEl.scrollHeight;
+  }
+
+  function buildConversations() {
+    const ids = new Set(["chief_of_staff"]);
+    state.chatAgents.forEach((a) => ids.add(String(a.agent_id || "").trim()));
+    state.agents.forEach((a) => ids.add(String(a.agent_id || "").trim()));
+    state.permissionRecent.forEach((e) => ids.add(String(e.agent_id || "").trim()));
+    ids.delete("");
+    const rows = [...ids].map((id) => {
+      const meta = getAgentMeta(id);
+      const stateItem = state.agents.find((a) => a.agent_id === id);
+      const chatAgent = state.chatAgents.find((a) => String(a.agent_id || "") === id);
+      const chatLast = chatAgent?.last_message || null;
+      const recent = [...state.permissionRecent].reverse().find((e) => String(e.agent_id || "") === id);
+      const status = String(stateItem?.state || recent?.status || "idle").toLowerCase();
+      const last = chatLast?.content || recent?.reason || recent?.action || recent?.decision_reason || "No recent messages";
+      const ts = new Date(chatLast?.created_at || recent?.timestamp || recent?.updated_at || recent?.created_at || 0).getTime();
+      return {
+        id,
+        meta,
+        status,
+        last,
+        ts,
+      };
+    });
+
+    return rows.sort((a, b) => {
+      if (a.ts !== b.ts) return b.ts - a.ts;
+      const aw = a.status === "working" ? 1 : 0;
+      const bw = b.status === "working" ? 1 : 0;
+      if (aw !== bw) return bw - aw;
+      return a.id.localeCompare(b.id);
+    });
+  }
+
+  function buildConversationMessages(agentId) {
+    const chatRows = (state.chatHistory[agentId] || []).map((m) => ({
+      id: m.id,
+      ts: new Date(m.created_at || Date.now()).getTime(),
+      role: m.role || "assistant",
+      text: m.content || "",
+      source: m.source || "ui",
+    }));
+    if (chatRows.length) return chatRows;
+
+    const runtimeRows = state.permissionRecent
+      .filter((e) => String(e.agent_id || "") === agentId)
+      .slice(-30)
+      .map((e) => ({
+        ts: new Date(e.timestamp || e.updated_at || e.created_at || Date.now()).getTime(),
+        role: "assistant",
+        text: e.reason || e.action || e.decision_reason || e.status || "Runtime event",
+        source: "ui",
+      }));
+    const localRows = state.localMessages[agentId] || [];
+
+    const out = [...runtimeRows, ...localRows].sort((a, b) => a.ts - b.ts);
+    if (out.length) return out;
+    return [{
+      ts: Date.now(),
+      role: "assistant",
+      text: "Ready. Waiting for mission instructions.",
+      source: "ui",
+    }];
+  }
+
+  function renderConversations() {
+    if (!conversationListEl) return;
+    const conversations = buildConversations();
+    if (!conversations.length) {
+      conversationListEl.innerHTML = `<div class="muted">No conversations</div>`;
+      return;
+    }
+    if (!conversations.some((c) => c.id === state.selectedConversation)) {
+      state.selectedConversation = conversations[0].id;
+      localStorage.setItem("selectedConversation", state.selectedConversation);
+    }
+
+    conversationListEl.innerHTML = conversations.map((c) => `
+      <button class="convo-item ${c.id === state.selectedConversation ? "active" : ""}" data-convo="${esc(c.id)}">
+        <span class="avatar" style="background:${esc(c.meta.color)}">${esc(c.meta.emoji)}</span>
+        <span class="convo-meta">
+          <div class="convo-name">${esc(c.meta.label)}</div>
+          <div class="convo-last">${esc(c.last)}</div>
+        </span>
+      </button>
+    `).join("");
+  }
+
+  function renderChatMessages() {
+    if (!chatMessagesEl) return;
+    const agentId = state.selectedConversation || "chief_of_staff";
+    const meta = getAgentMeta(agentId);
+    if (chatThreadTitleEl) chatThreadTitleEl.textContent = `${meta.emoji} ${meta.label}`;
+    if (chatThreadSubEl) chatThreadSubEl.textContent = `Agent ID: ${agentId}`;
+
+    const messages = buildConversationMessages(agentId);
+    chatMessagesEl.innerHTML = messages.map((msg) => {
+      const self = msg.role === "user" || msg.role === "self";
+      const actor = self ? getAgentMeta("operator") : meta;
+      const source = String(msg.source || "ui").toLowerCase();
+      const roleLabel = self ? "user" : "assistant";
+      return `
+        <article class="msg ${self ? "self" : ""}">
+          <span class="avatar" style="background:${esc(actor.color)}">${esc(actor.emoji)}</span>
+          <div class="msg-bubble">
+            <div class="msg-head">${esc(actor.label)} · ${esc(roleLabel)} · ${esc(source)} · ${esc(fmtTime(msg.ts))}</div>
+            <div>${esc(msg.text)}</div>
+          </div>
+        </article>
+      `;
+    }).join("");
+    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  }
+
+  function renderChatPanel() {
+    renderConversations();
+    renderChatMessages();
+  }
+
+  async function sendLocalMessage() {
+    const value = String(chatInputEl?.value || "").trim();
+    if (!value) return;
+    const id = state.selectedConversation || "chief_of_staff";
+    if (!state.apiCaps.runtimeChat) {
+      if (!state.localMessages[id]) state.localMessages[id] = [];
+      state.localMessages[id].push({ ts: Date.now(), role: "self", text: value, source: "ui" });
+      chatInputEl.value = "";
+      renderChatPanel();
+      return;
+    }
+
+    const prevLabel = chatSendBtn?.textContent || "Send";
+    if (chatSendBtn) {
+      chatSendBtn.disabled = true;
+      chatSendBtn.textContent = "Sending...";
+    }
+
+    try {
+      await fetchJson(api("/runtime/chat"), {
+        method: "POST",
+        body: JSON.stringify({ agent_id: id, message: value, source: "ui" }),
+      });
+      chatInputEl.value = "";
+      await refreshChatData(id);
+      renderChatPanel();
+    } catch (err) {
+      console.error(err);
+      if (!state.localMessages[id]) state.localMessages[id] = [];
+      state.localMessages[id].push({ ts: Date.now(), role: "assistant", text: `Error sending message: ${err?.message || err}`, source: "ui" });
+      renderChatPanel();
+    } finally {
+      if (chatSendBtn) {
+        chatSendBtn.disabled = false;
+        chatSendBtn.textContent = prevLabel;
+      }
+    }
   }
 
   async function postMissionAction(action, id) {
@@ -502,6 +753,8 @@
         }));
       }
 
+      await refreshChatData(state.selectedConversation);
+
       window.agentState = {
         agents: state.agents,
         stats: state.permissionStats,
@@ -514,10 +767,12 @@
       renderBadges();
       renderKanban();
       renderEvents();
+      renderChatPanel();
       renderHomeKpis();
     } catch (error) {
       console.error(error);
       setOnline(false);
+      renderChatPanel();
     }
   }
   function showPage(route) {
@@ -530,6 +785,9 @@
 
     const titles = {
       home: ["Home", "Overview"],
+      chat: ["Chat", "Conversations with agents"],
+      stage: ["Stage", "Mission timeline theater"],
+      gallery: ["Gallery", "Operational snapshots"],
       missions: ["Missions", "Track proposals and execution"],
       agents: ["Agents", "Live state"],
       events: ["Events", "Runtime events"],
@@ -543,8 +801,8 @@
 
   function initRouting() {
     function onHash() {
-      const h = (location.hash || "#agents").replace("#", "");
-      showPage(routes.includes(h) ? h : "agents");
+      const h = (location.hash || "#home").replace("#", "");
+      showPage(routes.includes(h) ? h : "home");
     }
     window.addEventListener("hashchange", onHash);
     onHash();
@@ -589,6 +847,18 @@
     state.pollTimer = setInterval(fetchRuntimeState, state.pollMs);
   }
 
+  function restartChatPolling() {
+    if (state.chatPollTimer) clearInterval(state.chatPollTimer);
+    state.chatPollTimer = setInterval(async () => {
+      try {
+        await refreshChatData(state.selectedConversation);
+        renderChatPanel();
+      } catch (err) {
+        console.error(err);
+      }
+    }, state.chatPollMs);
+  }
+
   function saveBaseUrl(value) {
     state.base = value.trim() || state.base;
     apiBaseInput.value = state.base;
@@ -605,6 +875,10 @@
   }
 
   function bindUi() {
+    themeToggleBtn?.addEventListener("click", () => {
+      applyTheme(state.theme === "light" ? "dark" : "light");
+    });
+
     saveApiBtn?.addEventListener("click", async () => {
       saveBaseUrl(apiBaseInput.value);
       await fetchRuntimeState();
@@ -639,14 +913,32 @@
       await fetchRuntimeState();
     });
 
+    conversationListEl?.addEventListener("click", async (event) => {
+      const btn = event.target.closest("[data-convo]");
+      if (!btn) return;
+      state.selectedConversation = btn.dataset.convo || "chief_of_staff";
+      localStorage.setItem("selectedConversation", state.selectedConversation);
+      await fetchChatHistory(state.selectedConversation, 50);
+      renderChatPanel();
+    });
+
+    chatSendBtn?.addEventListener("click", sendLocalMessage);
+    chatInputEl?.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      await sendLocalMessage();
+    });
+
     bindDynamicActions();
   }
 
   initRouting();
   bindUi();
   initPhaser();
+  renderChatPanel();
   fetchRuntimeState();
   restartPolling();
+  restartChatPolling();
 })();
 
 
