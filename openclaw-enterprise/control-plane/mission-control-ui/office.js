@@ -37,8 +37,12 @@
   const officeCanvas = document.getElementById("office");
   const AGENT_META = {
     chief_of_staff: { emoji: "🧠", color: "#ff7d5f", label: "Chief of Staff" },
-    fullstack_builder: { emoji: "🛠️", color: "#3cc9ff", label: "Fullstack Builder" },
+    developer: { emoji: "🛠️", color: "#3cc9ff", label: "Developer" },
     code_reviewer: { emoji: "🧪", color: "#9cfa6b", label: "Code Reviewer" },
+    security_agent: { emoji: "🛡️", color: "#ffc857", label: "Security Agent" },
+    financial_analyst: { emoji: "💸", color: "#c59dff", label: "Financial Analyst" },
+    financial_parser: { emoji: "📊", color: "#49e1b8", label: "Financial Parser" },
+    fullstack_builder: { emoji: "🛠️", color: "#3cc9ff", label: "Fullstack Builder" },
     security_auditor: { emoji: "🛡️", color: "#ffc857", label: "Security Auditor" },
     finance_specialist: { emoji: "💸", color: "#c59dff", label: "Finance Specialist" },
     devops_engineer: { emoji: "☁️", color: "#49e1b8", label: "DevOps Engineer" },
@@ -47,7 +51,7 @@
   };
 
   const state = {
-    base: localStorage.getItem("apiBase") || apiBaseInput.value || "http://127.0.0.1:19000",
+    base: localStorage.getItem("apiBase") || apiBaseInput.value || "http://127.0.0.1:8001",
     pollMs: Number(localStorage.getItem("pollMs") || "1000"),
     online: false,
     agents: [],
@@ -61,8 +65,12 @@
     theme: localStorage.getItem("themeMode") || "dark",
     selectedConversation: localStorage.getItem("selectedConversation") || "chief_of_staff",
     localMessages: {},
+    chatHistory: {},
+    chatAgents: [],
     trackedExecutionIds: (() => { try { const raw = localStorage.getItem("trackedExecutionIds"); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? [...new Set(arr.map((x) => String(x || "").trim()).filter(Boolean))] : []; } catch { return []; } })(),
-    apiCaps: { permissionStats: true, agentsState: true, permissionRecent: true, executions: true, runtimeStatus: false, metrics: false, runtimeApprove: false, runtimeReject: false },
+    chatPollMs: 3000,
+    chatPollTimer: null,
+    apiCaps: { permissionStats: true, agentsState: true, permissionRecent: true, executions: true, runtimeStatus: false, metrics: false, runtimeApprove: false, runtimeReject: false, runtimeChat: true, runtimeChatHistory: true, runtimeChatAgents: true },
   };
 
   apiBaseInput.value = state.base;
@@ -134,6 +142,48 @@
     return response.text();
   }
 
+  async function fetchChatAgents() {
+    if (!state.apiCaps.runtimeChatAgents) return;
+    try {
+      const response = await fetchJson(api("/runtime/chat/agents"));
+      state.chatAgents = Array.isArray(response?.items) ? response.items : [];
+    } catch (err) {
+      if (String(err?.message || "").startsWith("404")) {
+        state.apiCaps.runtimeChatAgents = false;
+        state.apiCaps.runtimeChat = false;
+      } else {
+        console.error(err);
+      }
+      state.chatAgents = [];
+    }
+  }
+
+  async function fetchChatHistory(agentId, limit = 50) {
+    const id = String(agentId || "").trim();
+    if (!id || !state.apiCaps.runtimeChatHistory) return;
+    try {
+      const response = await fetchJson(api(`/runtime/chat/history/${encodeURIComponent(id)}?limit=${Number(limit) || 50}`));
+      state.chatHistory[id] = Array.isArray(response?.items) ? response.items : [];
+    } catch (err) {
+      if (String(err?.message || "").startsWith("404")) {
+        state.apiCaps.runtimeChatHistory = false;
+        state.apiCaps.runtimeChat = false;
+      } else {
+        console.error(err);
+      }
+      state.chatHistory[id] = [];
+    }
+  }
+
+  async function refreshChatData(agentId = state.selectedConversation) {
+    if (!state.apiCaps.runtimeChat) return;
+    const id = String(agentId || "chief_of_staff");
+    await Promise.all([
+      fetchChatAgents(),
+      fetchChatHistory(id, 50),
+    ]);
+  }
+
   function addTrackedExecutionId(id) {
     const value = String(id || "").trim();
     if (!value) return false;
@@ -150,6 +200,9 @@
     state.apiCaps.metrics = Boolean(paths["/metrics"]?.get);
     state.apiCaps.runtimeApprove = Boolean(paths["/runtime/approve"]?.post);
     state.apiCaps.runtimeReject = Boolean(paths["/runtime/reject"]?.post);
+    state.apiCaps.runtimeChat = Boolean(paths["/runtime/chat"]?.post);
+    state.apiCaps.runtimeChatHistory = Boolean(paths["/runtime/chat/history/{agent_id}"]?.get);
+    state.apiCaps.runtimeChatAgents = Boolean(paths["/runtime/chat/agents"]?.get);
   }
 
   function parsePromMetrics(text) {
@@ -376,24 +429,30 @@
 
   function buildConversations() {
     const ids = new Set(["chief_of_staff"]);
+    state.chatAgents.forEach((a) => ids.add(String(a.agent_id || "").trim()));
     state.agents.forEach((a) => ids.add(String(a.agent_id || "").trim()));
     state.permissionRecent.forEach((e) => ids.add(String(e.agent_id || "").trim()));
     ids.delete("");
     const rows = [...ids].map((id) => {
       const meta = getAgentMeta(id);
       const stateItem = state.agents.find((a) => a.agent_id === id);
+      const chatAgent = state.chatAgents.find((a) => String(a.agent_id || "") === id);
+      const chatLast = chatAgent?.last_message || null;
       const recent = [...state.permissionRecent].reverse().find((e) => String(e.agent_id || "") === id);
       const status = String(stateItem?.state || recent?.status || "idle").toLowerCase();
-      const last = recent?.reason || recent?.action || recent?.decision_reason || "No recent messages";
+      const last = chatLast?.content || recent?.reason || recent?.action || recent?.decision_reason || "No recent messages";
+      const ts = new Date(chatLast?.created_at || recent?.timestamp || recent?.updated_at || recent?.created_at || 0).getTime();
       return {
         id,
         meta,
         status,
         last,
+        ts,
       };
     });
 
     return rows.sort((a, b) => {
+      if (a.ts !== b.ts) return b.ts - a.ts;
       const aw = a.status === "working" ? 1 : 0;
       const bw = b.status === "working" ? 1 : 0;
       if (aw !== bw) return bw - aw;
@@ -402,13 +461,23 @@
   }
 
   function buildConversationMessages(agentId) {
+    const chatRows = (state.chatHistory[agentId] || []).map((m) => ({
+      id: m.id,
+      ts: new Date(m.created_at || Date.now()).getTime(),
+      role: m.role || "assistant",
+      text: m.content || "",
+      source: m.source || "ui",
+    }));
+    if (chatRows.length) return chatRows;
+
     const runtimeRows = state.permissionRecent
       .filter((e) => String(e.agent_id || "") === agentId)
       .slice(-30)
       .map((e) => ({
         ts: new Date(e.timestamp || e.updated_at || e.created_at || Date.now()).getTime(),
-        role: "agent",
+        role: "assistant",
         text: e.reason || e.action || e.decision_reason || e.status || "Runtime event",
+        source: "ui",
       }));
     const localRows = state.localMessages[agentId] || [];
 
@@ -416,8 +485,9 @@
     if (out.length) return out;
     return [{
       ts: Date.now(),
-      role: "agent",
+      role: "assistant",
       text: "Ready. Waiting for mission instructions.",
+      source: "ui",
     }];
   }
 
@@ -453,13 +523,15 @@
 
     const messages = buildConversationMessages(agentId);
     chatMessagesEl.innerHTML = messages.map((msg) => {
-      const self = msg.role === "self";
+      const self = msg.role === "user" || msg.role === "self";
       const actor = self ? getAgentMeta("operator") : meta;
+      const source = String(msg.source || "ui").toLowerCase();
+      const roleLabel = self ? "user" : "assistant";
       return `
         <article class="msg ${self ? "self" : ""}">
           <span class="avatar" style="background:${esc(actor.color)}">${esc(actor.emoji)}</span>
           <div class="msg-bubble">
-            <div class="msg-head">${esc(actor.label)} · ${esc(fmtTime(msg.ts))}</div>
+            <div class="msg-head">${esc(actor.label)} · ${esc(roleLabel)} · ${esc(source)} · ${esc(fmtTime(msg.ts))}</div>
             <div>${esc(msg.text)}</div>
           </div>
         </article>
@@ -473,14 +545,43 @@
     renderChatMessages();
   }
 
-  function sendLocalMessage() {
+  async function sendLocalMessage() {
     const value = String(chatInputEl?.value || "").trim();
     if (!value) return;
     const id = state.selectedConversation || "chief_of_staff";
-    if (!state.localMessages[id]) state.localMessages[id] = [];
-    state.localMessages[id].push({ ts: Date.now(), role: "self", text: value });
-    chatInputEl.value = "";
-    renderChatPanel();
+    if (!state.apiCaps.runtimeChat) {
+      if (!state.localMessages[id]) state.localMessages[id] = [];
+      state.localMessages[id].push({ ts: Date.now(), role: "self", text: value, source: "ui" });
+      chatInputEl.value = "";
+      renderChatPanel();
+      return;
+    }
+
+    const prevLabel = chatSendBtn?.textContent || "Send";
+    if (chatSendBtn) {
+      chatSendBtn.disabled = true;
+      chatSendBtn.textContent = "Sending...";
+    }
+
+    try {
+      await fetchJson(api("/runtime/chat"), {
+        method: "POST",
+        body: JSON.stringify({ agent_id: id, message: value, source: "ui" }),
+      });
+      chatInputEl.value = "";
+      await refreshChatData(id);
+      renderChatPanel();
+    } catch (err) {
+      console.error(err);
+      if (!state.localMessages[id]) state.localMessages[id] = [];
+      state.localMessages[id].push({ ts: Date.now(), role: "assistant", text: `Error sending message: ${err?.message || err}`, source: "ui" });
+      renderChatPanel();
+    } finally {
+      if (chatSendBtn) {
+        chatSendBtn.disabled = false;
+        chatSendBtn.textContent = prevLabel;
+      }
+    }
   }
 
   async function postMissionAction(action, id) {
@@ -652,6 +753,8 @@
         }));
       }
 
+      await refreshChatData(state.selectedConversation);
+
       window.agentState = {
         agents: state.agents,
         stats: state.permissionStats,
@@ -744,6 +847,18 @@
     state.pollTimer = setInterval(fetchRuntimeState, state.pollMs);
   }
 
+  function restartChatPolling() {
+    if (state.chatPollTimer) clearInterval(state.chatPollTimer);
+    state.chatPollTimer = setInterval(async () => {
+      try {
+        await refreshChatData(state.selectedConversation);
+        renderChatPanel();
+      } catch (err) {
+        console.error(err);
+      }
+    }, state.chatPollMs);
+  }
+
   function saveBaseUrl(value) {
     state.base = value.trim() || state.base;
     apiBaseInput.value = state.base;
@@ -798,19 +913,20 @@
       await fetchRuntimeState();
     });
 
-    conversationListEl?.addEventListener("click", (event) => {
+    conversationListEl?.addEventListener("click", async (event) => {
       const btn = event.target.closest("[data-convo]");
       if (!btn) return;
       state.selectedConversation = btn.dataset.convo || "chief_of_staff";
       localStorage.setItem("selectedConversation", state.selectedConversation);
+      await fetchChatHistory(state.selectedConversation, 50);
       renderChatPanel();
     });
 
     chatSendBtn?.addEventListener("click", sendLocalMessage);
-    chatInputEl?.addEventListener("keydown", (event) => {
+    chatInputEl?.addEventListener("keydown", async (event) => {
       if (event.key !== "Enter") return;
       event.preventDefault();
-      sendLocalMessage();
+      await sendLocalMessage();
     });
 
     bindDynamicActions();
@@ -822,6 +938,7 @@
   renderChatPanel();
   fetchRuntimeState();
   restartPolling();
+  restartChatPolling();
 })();
 
 
