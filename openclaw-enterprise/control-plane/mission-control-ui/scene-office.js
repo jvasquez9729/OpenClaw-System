@@ -7,12 +7,21 @@
 
   /* ── Agent definitions ───────────────────────────────────── */
   const AGENTS = {
-    chief_of_staff:     { tile: [2, 1], color: 0xff7d5f, label: "🧠 Chief"    },
-    fullstack_builder:  { tile: [5, 1], color: 0x3cc9ff, label: "🛠️ Builder"  },
-    code_reviewer:      { tile: [8, 1], color: 0x9cfa6b, label: "🧪 Review"   },
-    security_auditor:   { tile: [2, 5], color: 0xffc857, label: "🛡️ Security" },
-    finance_specialist: { tile: [5, 5], color: 0xc59dff, label: "💸 Finance"  },
-    devops_engineer:    { tile: [8, 5], color: 0x49e1b8, label: "☁️ DevOps"   },
+    chief_of_staff:     { tile: [2, 1], color: 0xff8cb8, label: "🧠 Chief"    },
+    fullstack_builder:  { tile: [5, 1], color: 0x7fd6ff, label: "🛠️ Builder"  },
+    code_reviewer:      { tile: [8, 1], color: 0x9bf59d, label: "🧪 Review"   },
+    security_auditor:   { tile: [2, 5], color: 0xffc18a, label: "🛡️ Security" },
+    finance_specialist: { tile: [5, 5], color: 0xd8b4ff, label: "💸 Finance"  },
+    devops_engineer:    { tile: [8, 5], color: 0x7cefd7, label: "☁️ DevOps"   },
+  };
+
+  const PALETTE = {
+    beige: 0xf5e6d3,
+    pink: 0xffd4e5,
+    lilac: 0xe8d5f5,
+    mint: 0xd5f5e3,
+    cream: 0xfff4e6,
+    warmLight: 0xffd48f,
   };
 
   /* ── Helpers ─────────────────────────────────────────────── */
@@ -104,232 +113,232 @@
     /* ── Draw the static office geometry ─────────────────── */
     _drawOffice() {
       const { width: W, height: H } = this.scale;
+      const floorColors = [0xf9eee1, 0xf5e6d3, 0xf8f1e7, 0xf2e7da];
 
-      // Background with warm dusk gradient
+      // Pastel ambient backdrop + warm spot gradients
       const bg = this.add.graphics();
-      bg.fillGradientStyle(0x2e1a10, 0x2e1a10, 0x150d08, 0x150d08, 1);
+      bg.fillGradientStyle(PALETTE.cream, PALETTE.cream, 0xefe8ff, 0xeaf9f1, 1);
       bg.fillRect(0, 0, W, H);
-      bg.fillStyle(0xffb36b, 0.12);
-      bg.fillCircle(W * 0.18, H * 0.1, 180);
-      bg.fillStyle(0xffa65a, 0.08);
-      bg.fillCircle(W * 0.78, H * 0.15, 220);
-      bg.setDepth(-200);
+      bg.fillStyle(0xffd58f, 0.18);
+      bg.fillCircle(W * 0.16, H * 0.12, 190);
+      bg.fillStyle(0xffc27a, 0.13);
+      bg.fillCircle(W * 0.84, H * 0.16, 220);
+      bg.fillStyle(0xffedc3, 0.10);
+      bg.fillCircle(W * 0.52, H * 0.04, 180);
+      bg.setDepth(-220);
 
-      /* ── FLOOR ──────────────────────────────────────────── */
+      /* ── FLOOR: light wood + decorative rugs ─────────────── */
       const floor = this.add.graphics();
-      floor.lineStyle(1, 0x51311d, 0.32);
+      floor.lineStyle(1, 0xe2cfbb, 0.55);
       for (let ty = 0; ty < 9; ty++) {
         for (let tx = 0; tx < 11; tx++) {
-          const even = (tx + ty) % 2 === 0;
-          this._tile(floor, tx, ty, even ? 0x72472b : 0x66402a, 1);
-          // tile edge lines
+          const c = floorColors[(tx + ty) % floorColors.length];
+          this._tile(floor, tx, ty, c, 1);
           const { x, y } = iso(tx, ty);
           const hw = TW / 2;
           floor.strokePoints([
-            { x,        y       },
+            { x, y },
             { x: x + hw, y: y + TH / 2 },
-            { x,        y: y + TH },
+            { x, y: y + TH },
             { x: x - hw, y: y + TH / 2 },
           ], true);
+          // subtle plank-like strokes
+          floor.lineStyle(1, 0xeedecf, 0.35);
+          floor.beginPath();
+          floor.moveTo(x - 8, y + TH / 2 - 3);
+          floor.lineTo(x + 8, y + TH / 2 + 3);
+          floor.strokePath();
         }
       }
       floor.setDepth(1);
 
-      // Central rug for extra depth cue
-      const rug = this.add.graphics();
+      const rugs = this.add.graphics();
       [[3, 2], [4, 2], [5, 2], [6, 2], [7, 2], [3, 3], [4, 3], [5, 3], [6, 3], [7, 3], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4]].forEach(([tx, ty]) => {
-        this._tile(rug, tx, ty, 0x8b5230, 0.42);
+        this._tile(rugs, tx, ty, PALETTE.lilac, 0.55);
       });
-      rug.setDepth(2);
+      [[1, 7], [2, 7], [3, 7], [1, 8], [2, 8], [3, 8]].forEach(([tx, ty]) => {
+        this._tile(rugs, tx, ty, PALETTE.pink, 0.45);
+      });
+      rugs.setDepth(2);
 
-      /* ── BACK WALLS + WINDOWS ───────────────────────────── */
+      /* ── WALLS: cream pastel ─────────────────────────────── */
       const walls = this.add.graphics();
-      walls.lineStyle(1, 0x3a2315, 0.55);
-      // North wall (ty = 0 row)
+      walls.lineStyle(1, 0xd7bea4, 0.65);
       for (let tx = 0; tx < 11; tx++) {
-        this._box(walls, tx, 0, 44, 0xaf7350, 0x7b4b32, 0x925939);
+        this._box(walls, tx, 0, 44, PALETTE.cream, 0xf1dfcb, 0xead5bf);
       }
-      // West wall (tx = 0 col, excluding corner already drawn)
       for (let ty = 1; ty < 9; ty++) {
-        this._box(walls, 0, ty, 44, 0xaf7350, 0x7b4b32, 0x925939);
+        this._box(walls, 0, ty, 44, PALETTE.cream, 0xf1dfcb, 0xead5bf);
       }
       walls.setDepth(4);
 
-      const windows = this.add.graphics();
-      windows.fillStyle(0xffd8a7, 0.2);
-      windows.fillRect(iso(4, 0).x - 100, iso(4, 0).y - 30, 210, 22);
-      windows.fillStyle(0xffcb8d, 0.12);
-      windows.fillRect(iso(4, 0).x - 95, iso(4, 0).y - 18, 200, 16);
-      windows.setDepth(40);
+      const wallDecor = this.add.graphics();
+      // Two large wall screens
+      const ws1 = iso(4, 0);
+      wallDecor.fillStyle(0xb89faa, 1);
+      wallDecor.fillRoundedRect(ws1.x - 68, ws1.y - 36, 136, 52, 8);
+      wallDecor.fillStyle(0x84d9ff, 0.95);
+      wallDecor.fillRoundedRect(ws1.x - 62, ws1.y - 30, 124, 40, 6);
+      const ws2 = iso(0, 4);
+      wallDecor.fillStyle(0xb89faa, 1);
+      wallDecor.fillRoundedRect(ws2.x - 28, ws2.y - 52, 90, 44, 8);
+      wallDecor.fillStyle(0x9fe9ff, 0.95);
+      wallDecor.fillRoundedRect(ws2.x - 22, ws2.y - 46, 78, 32, 6);
 
-      /* ── DESKS (6 agent workstations) ───────────────────── */
+      // Frames / paintings
+      [[2, 0, PALETTE.pink], [6, 0, PALETTE.mint], [0, 6, PALETTE.lilac]].forEach(([tx, ty, color]) => {
+        const p = iso(tx, ty);
+        wallDecor.fillStyle(0xceb295, 1);
+        wallDecor.fillRoundedRect(p.x - 24, p.y - 30, 48, 26, 4);
+        wallDecor.fillStyle(color, 0.95);
+        wallDecor.fillRoundedRect(p.x - 20, p.y - 26, 40, 18, 3);
+      });
+
+      // Clock
+      const clock = iso(5, 0);
+      wallDecor.fillStyle(0xffffff, 0.92);
+      wallDecor.fillCircle(clock.x + 86, clock.y - 18, 12);
+      wallDecor.lineStyle(2, 0x8a7060, 1);
+      wallDecor.strokeCircle(clock.x + 86, clock.y - 18, 12);
+      wallDecor.beginPath();
+      wallDecor.moveTo(clock.x + 86, clock.y - 18);
+      wallDecor.lineTo(clock.x + 86, clock.y - 24);
+      wallDecor.moveTo(clock.x + 86, clock.y - 18);
+      wallDecor.lineTo(clock.x + 92, clock.y - 15);
+      wallDecor.strokePath();
+
+      // Whiteboard
+      const board = iso(8, 0);
+      wallDecor.fillStyle(0xffffff, 0.95);
+      wallDecor.fillRoundedRect(board.x - 42, board.y - 34, 84, 36, 6);
+      wallDecor.lineStyle(2, 0xc3a88d, 1);
+      wallDecor.strokeRoundedRect(board.x - 42, board.y - 34, 84, 36, 6);
+      wallDecor.lineStyle(2, 0x9ad0ff, 0.9);
+      wallDecor.beginPath();
+      wallDecor.moveTo(board.x - 30, board.y - 14);
+      wallDecor.lineTo(board.x + 20, board.y - 22);
+      wallDecor.moveTo(board.x - 30, board.y - 7);
+      wallDecor.lineTo(board.x + 12, board.y - 11);
+      wallDecor.strokePath();
+      wallDecor.setDepth(80);
+
+      /* ── DESKS (6 workstations) ──────────────────────────── */
       const DESK_TILES = [
         [2, 1], [5, 1], [8, 1],
         [2, 5], [5, 5], [8, 5],
       ];
       const DESK_H = 20;
-
       DESK_TILES.forEach(([tx, ty]) => {
         const { x, y } = iso(tx, ty);
         const depth = y + TH;
 
-        // Desk shadow
-        const sg = this.add.graphics();
-        sg.fillStyle(0x000000, 0.18);
-        sg.fillEllipse(x + 4, y + TH + 6, 50, 16);
-        sg.setDepth(depth - 0.5);
+        const shadow = this.add.graphics();
+        shadow.fillStyle(0x000000, 0.10);
+        shadow.fillEllipse(x + 2, y + TH + 5, 52, 18);
+        shadow.setDepth(depth - 0.5);
 
-        // Desk body — walnut wood
-        const dg = this.add.graphics();
-        this._box(dg, tx, ty, DESK_H, 0xc57a43, 0x7f4a23, 0x9d5e2e);
-        // Wood grain line on top face
-        dg.lineStyle(1, 0xe7b47a, 0.35);
-        dg.beginPath();
-        dg.moveTo(x - 6, y - DESK_H + 4);
-        dg.lineTo(x + 22, y - DESK_H + 16);
-        dg.strokePath();
-        dg.setDepth(depth);
+        const desk = this.add.graphics();
+        this._box(desk, tx, ty, DESK_H, 0xf7d9b7, 0xe6c39f, 0xf0cfad);
+        desk.lineStyle(1, 0xeed6bf, 0.6);
+        desk.beginPath();
+        desk.moveTo(x - 10, y - DESK_H + 5);
+        desk.lineTo(x + 21, y - DESK_H + 16);
+        desk.strokePath();
+        desk.setDepth(depth);
 
-        // Monitor
-        const mg = this.add.graphics();
+        const setup = this.add.graphics();
         const mx = x + 10;
         const my = y - DESK_H - 16;
-        // Bezel
-        mg.fillStyle(0x160f0e, 1);
-        mg.fillRect(mx - 12, my - 13, 24, 18);
-        // Screen glow
-        mg.fillStyle(0xffb560, 0.85);
-        mg.fillRect(mx - 10, my - 11, 20, 14);
-        // Scanlines
-        mg.fillStyle(0x000000, 0.18);
-        for (let i = 0; i < 7; i++) {
-          mg.fillRect(mx - 10, my - 11 + i * 2, 20, 1);
-        }
-        // Code lines on screen
-        mg.fillStyle(0xfff1cb, 0.65);
-        mg.fillRect(mx - 8, my - 9, 14, 1);
-        mg.fillRect(mx - 8, my - 6, 10, 1);
-        mg.fillRect(mx - 8, my - 3, 12, 1);
-        mg.fillStyle(0xffdf9e, 0.5);
-        mg.fillRect(mx - 8, my,     7,  1);
-        // Stand
-        mg.fillStyle(0x2f2623, 1);
-        mg.fillRect(mx - 2, my + 5, 4, 4);
-        mg.fillRect(mx - 6, my + 8, 12, 2);
-        // Keyboard
-        mg.fillStyle(0x4f2f1f, 1);
-        mg.fillRect(mx - 13, my + 10, 15, 4);
-        // Mug
-        mg.fillStyle(0xffd6ab, 1);
-        mg.fillCircle(mx + 9, my + 9, 3);
-        mg.lineStyle(1, 0x915938, 1);
-        mg.strokeCircle(mx + 12, my + 9, 1.8);
-        mg.setDepth(depth + 4);
-
-        // Desk lamp beam
-        const lg = this.add.graphics();
-        lg.fillStyle(0xffd18f, 0.14);
-        lg.beginPath();
-        lg.moveTo(mx - 18, my - 4);
-        lg.lineTo(mx - 2, my + 24);
-        lg.lineTo(mx - 30, my + 24);
-        lg.closePath();
-        lg.fillPath();
-        lg.setDepth(depth + 2);
+        setup.fillStyle(0x9f93ad, 1);
+        setup.fillRoundedRect(mx - 13, my - 13, 26, 19, 3);
+        setup.fillStyle(0xc9f0ff, 0.95);
+        setup.fillRoundedRect(mx - 11, my - 11, 22, 15, 2);
+        setup.fillStyle(0x7cefd7, 0.65);
+        setup.fillRect(mx - 9, my - 9, 14, 2);
+        setup.fillStyle(0x87b7ff, 0.55);
+        setup.fillRect(mx - 9, my - 6, 10, 2);
+        setup.fillStyle(0xaf89d8, 0.6);
+        setup.fillRect(mx - 9, my - 3, 12, 2);
+        setup.fillStyle(0x9f93ad, 1);
+        setup.fillRect(mx - 2, my + 5, 4, 4);
+        setup.fillRect(mx - 7, my + 8, 14, 2);
+        setup.fillStyle(PALETTE.pink, 1);
+        setup.fillCircle(mx + 10, my + 10, 3);
+        setup.lineStyle(1, 0xb9889f, 0.9);
+        setup.strokeCircle(mx + 13, my + 10, 2);
+        setup.setDepth(depth + 4);
       });
 
-      /* ── MEETING TABLE (centre of room) ─────────────────── */
-      const mtG = this.add.graphics();
-      const TABLE_H = 16;
-      // Four-tile wide conference table
-      [[4, 3], [5, 3], [6, 3], [7, 3]].forEach(([tx, ty]) => {
-        this._box(mtG, tx, ty, TABLE_H, 0x9a5d35, 0x5f351d, 0x7c4728);
-      });
-      const { y: tY } = iso(5, 3);
-      mtG.setDepth(tY + TH + 1);
+      /* ── Lounge sofas + coffee table ─────────────────────── */
+      const lounge = this.add.graphics();
+      [[3, 5], [4, 5], [5, 5]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 14, PALETTE.pink, 0xe9bfd0, 0xf3c9da));
+      [[3, 6], [4, 6], [5, 6]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 25, 0xf2bfd3, 0xe3aebf, 0xeeb8ca));
+      [[6, 4], [7, 4]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 14, PALETTE.mint, 0xbfead4, 0xcaf0dc));
+      [[6, 5], [7, 5]].forEach(([tx, ty]) => this._box(lounge, tx, ty, 25, 0xc6f0da, 0xb2dfc7, 0xbde8d0));
+      this._box(lounge, 5, 3, 12, PALETTE.beige, 0xe6cfb3, 0xefdac1);
+      this._box(lounge, 6, 3, 12, PALETTE.beige, 0xe6cfb3, 0xefdac1);
+      const coffee = iso(5, 3);
+      lounge.fillStyle(0xfff7ed, 0.95);
+      lounge.fillCircle(coffee.x + 10, coffee.y - 6, 5);
+      lounge.fillStyle(0xffd4e5, 0.92);
+      lounge.fillCircle(coffee.x - 6, coffee.y - 4, 4);
+      lounge.setDepth(iso(5, 6).y + 70);
 
-      /* ── CHAIRS around meeting table ─────────────────────── */
-      [[3, 2], [5, 2], [7, 2], [3, 4], [5, 4], [7, 4], [8, 3]].forEach(([tx, ty]) => {
-        // skip positions occupied by agent desks
-        if (DESK_TILES.some(([dx, dy]) => dx === tx && dy === ty)) return;
-        const cg = this.add.graphics();
-        const { y: cy } = iso(tx, ty);
-        this._box(cg, tx, ty, 12, 0xcd834a, 0x7f4a2b, 0x9a5c34);
-        this._box(cg, tx, ty, 22, 0xb26b3d, 0x6e3f23, 0x894f2e);
-        cg.setDepth(cy + TH);
-      });
-
-      /* ── BOOKSHELVES + SERVER UNIT ─────────────────────── */
+      /* ── Stands, bookshelf, and floor lamps ──────────────── */
+      const furniture = this.add.graphics();
+      // Bookshelf with colorful books
       [[10, 2], [10, 3], [10, 4]].forEach(([tx, ty]) => {
-        const sh = this.add.graphics();
-        const { x, y } = iso(tx, ty);
-        this._box(sh, tx, ty, 46, 0x8b5633, 0x5d381f, 0x734526);
-        sh.fillStyle(0xffd7ac, 0.7);
-        sh.fillRect(x - 12, y - 40, 24, 2);
-        sh.fillRect(x - 12, y - 33, 24, 2);
-        sh.fillRect(x - 12, y - 26, 24, 2);
-        sh.setDepth(y + 70);
+        const p = iso(tx, ty);
+        this._box(furniture, tx, ty, 46, 0xf0d6b8, 0xdcbc9a, 0xe8cba9);
+        [0xffb0c9, 0xc3a4f4, 0xa9f0cd, 0xb7d7ff, 0xffd8a6].forEach((c, i) => {
+          furniture.fillStyle(c, 1);
+          furniture.fillRect(p.x - 14 + i * 6, p.y - 39 + (i % 2), 4, 9);
+        });
       });
-      const server = this.add.graphics();
-      const sPos = iso(9, 7);
-      this._box(server, 9, 7, 40, 0x4b3529, 0x2e221b, 0x3a2a21);
-      server.fillStyle(0x6efdb3, 0.8);
-      server.fillRect(sPos.x - 10, sPos.y - 34, 20, 3);
-      server.fillRect(sPos.x - 10, sPos.y - 26, 16, 2);
-      server.fillStyle(0xffbf6a, 0.8);
-      server.fillRect(sPos.x - 10, sPos.y - 20, 10, 2);
-      server.setDepth(sPos.y + 70);
 
-      /* ── LOUNGE SOFA ─────────────────────────────────────── */
-      const sofa = this.add.graphics();
-      [[1, 7], [2, 7], [3, 7]].forEach(([tx, ty]) => this._box(sofa, tx, ty, 14, 0xa75f37, 0x6b3a22, 0x844b2a));
-      [[1, 8], [2, 8], [3, 8]].forEach(([tx, ty]) => this._box(sofa, tx, ty, 24, 0x8f5030, 0x5a311d, 0x713f25));
-      sofa.setDepth(iso(2, 8).y + 68);
+      // Floor lamps
+      [[1, 3], [9, 6]].forEach(([tx, ty]) => {
+        const p = iso(tx, ty);
+        furniture.fillStyle(0xb4a39a, 1);
+        furniture.fillRect(p.x - 1, p.y - 52, 2, 35);
+        furniture.fillStyle(0xffecce, 1);
+        furniture.fillEllipse(p.x, p.y - 57, 18, 12);
+        furniture.fillStyle(0xffd48f, 0.18);
+        furniture.beginPath();
+        furniture.moveTo(p.x, p.y - 52);
+        furniture.lineTo(p.x + 38, p.y + 4);
+        furniture.lineTo(p.x - 38, p.y + 4);
+        furniture.closePath();
+        furniture.fillPath();
+      });
+      furniture.setDepth(95);
 
-      /* ── PLANTS ─────────────────────────────────────────── */
-      [[1, 0], [9, 0], [0, 8], [10, 8]].forEach(([tx, ty]) => {
+      /* ── Plants with colorful pots ───────────────────────── */
+      [[1, 0, 0xffd4e5], [9, 0, 0xe8d5f5], [0, 8, 0xd5f5e3], [10, 8, 0xffd7b8], [4, 8, 0xf2d0ff]].forEach(([tx, ty, potColor]) => {
         const pg = this.add.graphics();
         const { x: px, y: py } = iso(tx, ty);
-        const POT_H = 12;
-        // Terracotta pot
-        this._box(pg, tx, ty, POT_H, 0x7a3412, 0x4e2009, 0x622a10);
-        // Foliage
-        pg.fillStyle(0x2e8f50, 1);
-        pg.fillCircle(px, py - POT_H - 6, 13);
-        pg.fillStyle(0x39aa5d, 1);
-        pg.fillCircle(px - 9,  py - POT_H - 2,  9);
-        pg.fillCircle(px + 9,  py - POT_H - 2,  9);
-        pg.fillStyle(0x55c978, 0.8);
-        pg.fillCircle(px,      py - POT_H - 16, 8);
-        pg.setDepth(py + TH + 20);
+        const POT_H = 13;
+        this._box(pg, tx, ty, POT_H, Number(potColor), dk(Number(potColor), 22), dk(Number(potColor), 14));
+        pg.fillStyle(0x65c889, 0.95);
+        pg.fillCircle(px, py - POT_H - 7, 14);
+        pg.fillStyle(0x80dba0, 0.95);
+        pg.fillCircle(px - 9, py - POT_H - 1, 9);
+        pg.fillCircle(px + 9, py - POT_H - 1, 9);
+        pg.fillStyle(0x99e6b3, 0.9);
+        pg.fillCircle(px, py - POT_H - 17, 8);
+        pg.fillStyle(0xffffff, 0.45);
+        pg.fillCircle(px - 4, py - POT_H - 11, 2);
+        pg.setDepth(py + TH + 24);
       });
 
-      /* ── PENDANT LIGHTS + AMBIENT GLOW ───────────────────── */
-      const pendants = this.add.graphics();
-      [[4, 1], [7, 1], [5, 4]].forEach(([tx, ty]) => {
-        const p = iso(tx, ty);
-        pendants.lineStyle(1, 0x3c2718, 0.8);
-        pendants.beginPath();
-        pendants.moveTo(p.x, p.y - 80);
-        pendants.lineTo(p.x, p.y - 28);
-        pendants.strokePath();
-        pendants.fillStyle(0xffce96, 0.95);
-        pendants.fillCircle(p.x, p.y - 24, 5);
-        pendants.fillStyle(0xffcb7a, 0.13);
-        pendants.beginPath();
-        pendants.moveTo(p.x, p.y - 20);
-        pendants.lineTo(p.x + 50, p.y + 30);
-        pendants.lineTo(p.x - 50, p.y + 30);
-        pendants.closePath();
-        pendants.fillPath();
-      });
-      pendants.setDepth(90);
-
+      // Warm ambient spots near center
       const glow = this.add.graphics();
-      glow.fillStyle(0xffb46b, 0.08);
-      glow.fillCircle(iso(5, 3).x, iso(5, 3).y + TH + 40, 160);
-      glow.fillStyle(0xffcc88, 0.06);
-      glow.fillCircle(iso(7, 4).x, iso(7, 4).y + TH + 30, 110);
+      glow.fillStyle(0xffd48f, 0.16);
+      glow.fillCircle(iso(5, 3).x, iso(5, 3).y + TH + 34, 170);
+      glow.fillStyle(0xffc97d, 0.10);
+      glow.fillCircle(iso(7, 5).x, iso(7, 5).y + TH + 22, 120);
+      glow.fillStyle(0xffe2b4, 0.08);
+      glow.fillCircle(iso(2, 6).x, iso(2, 6).y + TH + 16, 95);
       glow.setDepth(2);
     }
 
@@ -338,84 +347,81 @@
        Draws upward: shadow at y≈0, head at y≈-34.              */
     _drawChar(g, color, state) {
       g.clear();
-      const body = dk(color, 42);
-      const dark = dk(color, 62);
+      const body = dk(color, 32);
+      const dark = dk(color, 52);
 
       // Drop shadow
-      g.fillStyle(0x000000, 0.22);
-      g.fillEllipse(0, 2, 20, 7);
+      g.fillStyle(0x000000, 0.18);
+      g.fillEllipse(0, 3, 26, 9);
 
       // Shoes
       g.fillStyle(0x1a1a1a, 1);
-      g.fillRect(-6, -6,  5, 5);
-      g.fillRect( 1, -6,  5, 5);
+      g.fillRect(-8, -8, 6, 6);
+      g.fillRect(2, -8, 6, 6);
 
       // Legs / trousers
       g.fillStyle(dark, 1);
-      g.fillRect(-5, -15, 4, 9);
-      g.fillRect( 1, -15, 4, 9);
+      g.fillRect(-7, -22, 5, 14);
+      g.fillRect(2, -22, 5, 14);
 
       // Body
       g.fillStyle(body, 1);
-      g.fillRect(-6, -25, 12, 12);
+      g.fillRect(-9, -38, 18, 18);
+      g.fillStyle(color, 0.36);
+      g.fillRect(-8, -37, 16, 4);
 
-      // Collar highlight
-      g.fillStyle(color, 0.35);
-      g.fillRect(-5, -25, 10, 2);
-
-      // Head (skin)
+      // Head
       g.fillStyle(0xf5c89a, 1);
-      g.fillRect(-4, -35, 8, 12);
+      g.fillRect(-6, -54, 12, 16);
 
-      // Hair / hat band in agent colour
+      // Hair / top accent
       g.fillStyle(color, 1);
-      g.fillRect(-4, -35, 8,  4);
-      g.fillRect(-5, -33, 2,  3);
-      g.fillRect( 3, -33, 2,  3);
+      g.fillRect(-6, -54, 12, 5);
+      g.fillRect(-7, -51, 3, 4);
+      g.fillRect(4, -51, 3, 4);
 
       // Eyes
       g.fillStyle(0x000000, 1);
-      g.fillRect(-3, -29, 2, 2);
-      g.fillRect( 1, -29, 2, 2);
+      g.fillRect(-4, -45, 2, 2);
+      g.fillRect(2, -45, 2, 2);
 
       // Mouth
       g.fillStyle(0xb07060, 1);
-      g.fillRect(-1, -25, 3, 1);
+      g.fillRect(-2, -40, 4, 1);
 
       // Arms / hands
       g.fillStyle(body, 1);
-      g.fillRect(-10, -23, 4, 9);
-      g.fillRect(  6, -23, 4, 9);
+      g.fillRect(-14, -35, 5, 12);
+      g.fillRect(9, -35, 5, 12);
       g.fillStyle(0xf5c89a, 1);
-      g.fillRect(-10, -15, 4, 4);
-      g.fillRect(  6, -15, 4, 4);
+      g.fillRect(-14, -24, 5, 5);
+      g.fillRect(9, -24, 5, 5);
 
       /* ── State-specific overlays ───────────────────────── */
       if (state === "working") {
-        // Screen glow reflected on face
-        g.fillStyle(0xffd39a, 0.28);
-        g.fillRect(-4, -35, 8, 12);
+        g.fillStyle(0xffe6be, 0.30);
+        g.fillRect(-6, -54, 12, 16);
         // Laptop / tablet in hands
-        g.fillStyle(0x20140f, 1);
-        g.fillRect(-6, -24, 12, 9);
-        g.fillStyle(0xffb56b, 0.85);
-        g.fillRect(-5, -23, 10, 7);
+        g.fillStyle(0x685d70, 1);
+        g.fillRect(-9, -35, 18, 12);
+        g.fillStyle(0xb9f0ff, 0.90);
+        g.fillRect(-8, -34, 16, 10);
         // Scanlines on tablet
         g.fillStyle(0x000000, 0.12);
-        for (let i = 0; i < 3; i++) {
-          g.fillRect(-5, -23 + i * 2, 10, 1);
+        for (let i = 0; i < 4; i++) {
+          g.fillRect(-8, -34 + i * 2, 16, 1);
         }
       }
 
       if (state === "hitl_wait") {
         // Exclamation bubble above head
-        g.fillStyle(0xffd166, 1);
-        g.fillRect(5, -44, 3, 7);
-        g.fillRect(5, -34, 3, 3);
+        g.fillStyle(0xffb14f, 1);
+        g.fillRect(8, -62, 4, 11);
+        g.fillRect(8, -48, 4, 4);
         // Slight blush
         g.fillStyle(0xff8080, 0.3);
-        g.fillRect(-4, -28, 3, 3);
-        g.fillRect( 1, -28, 3, 3);
+        g.fillRect(-5, -44, 4, 3);
+        g.fillRect(1, -44, 4, 3);
       }
     }
 
@@ -424,13 +430,14 @@
       Object.entries(AGENTS).forEach(([id, cfg]) => {
         const [tx, ty] = cfg.tile;
         const { x: px, y: py } = iso(tx, ty);
-        const DESK_H = 18;
+        const DESK_H = 20;
 
         // Container sits at desk level
         const cx = px;
         const cy = py - DESK_H;
 
         const container = this.add.container(cx, cy);
+        container.setScale(1.12);
         container.setDepth(py + TH + 10);
 
         // Character (local origin = feet at 0,0)
@@ -438,15 +445,17 @@
         this._drawChar(charG, cfg.color, "idle");
         container.add(charG);
 
-        // Status dot (top-right of character)
-        const dot = this.add.circle(13, -42, 5, 0x667280);
+        // Status indicator (larger halo + dot)
+        const halo = this.add.circle(20, -62, 11, 0xffffff, 0.18);
+        container.add(halo);
+        const dot = this.add.circle(20, -62, 7, 0x8ea1bc);
         container.add(dot);
 
         // Name label
         const hexCol = "#" + cfg.color.toString(16).padStart(6, "0");
-        const label = this.add.text(0, -50, cfg.label, {
+        const label = this.add.text(0, -64, cfg.label, {
           fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
-          fontSize:   "12px",
+          fontSize:   "13px",
           fontStyle:  "bold",
           color:       hexCol,
           stroke:      "#000000",
@@ -456,21 +465,21 @@
         container.add(label);
 
         // Thought bubble (hidden until working)
-        const bubbleBg = this.add.rectangle(0, -66, 40, 20, 0x0c1a34, 0.95)
-          .setStrokeStyle(1, 0x2a4878, 1)
+        const bubbleBg = this.add.rectangle(0, -84, 48, 22, 0xfff3e5, 0.95)
+          .setStrokeStyle(1, 0xdabf9d, 1)
           .setVisible(false);
         container.add(bubbleBg);
 
-        const bubbleTxt = this.add.text(0, -66, "...", {
+        const bubbleTxt = this.add.text(0, -84, "...", {
           fontFamily: "monospace",
-          fontSize:   "11px",
-          color:      "#ffd39a",
+          fontSize:   "12px",
+          color:      "#8d769f",
         }).setOrigin(0.5).setVisible(false);
         container.add(bubbleTxt);
 
         this.agentViews.set(id, {
           id, tx, ty, cfg,
-          container, charG, dot, label,
+          container, charG, dot, halo, label,
           bubbleBg, bubbleTxt,
           baseX: cx, baseY: cy,
           state: "idle",
@@ -501,7 +510,7 @@
       if (mode === "working") {
         view.bobTween = this.tweens.add({
           targets:  view.container,
-          y:        view.baseY - 5,
+          y:        view.baseY - 7,
           duration: 500,
           ease:     "Sine.InOut",
           yoyo:     true,
@@ -511,11 +520,11 @@
         // brief shake
         view.bobTween = this.tweens.add({
           targets:  view.container,
-          x:        view.baseX + 3,
+          x:        view.baseX + 4,
           duration: 70,
           ease:     "Linear",
           yoyo:     true,
-          repeat:   3,
+          repeat:   4,
           onComplete: () => {
             if (view.container) view.container.x = view.baseX;
             view.bobTween = null;
@@ -541,16 +550,22 @@
         this.setAgentMode(view, mode);
 
         if (mode === "working") {
-          const pulse = 0.55 + Math.sin(time / 300) * 0.45;
-          view.dot.setFillStyle(0x44df7c, pulse);
+          const pulse = 0.55 + Math.sin(time / 260) * 0.45;
+          view.dot.setFillStyle(0x53e7a2, 1);
+          view.halo.setFillStyle(0x53e7a2, 0.18 + pulse * 0.25);
+          view.halo.setScale(1 + pulse * 0.22);
           view.bubbleBg.setVisible(true);
           view.bubbleTxt.setVisible(true);
         } else if (mode === "hitl_wait") {
-          view.dot.setFillStyle(0xffd166, 1);
+          view.dot.setFillStyle(0xffaf4d, 1);
+          view.halo.setFillStyle(0xffaf4d, 0.30);
+          view.halo.setScale(1.08);
           view.bubbleBg.setVisible(false);
           view.bubbleTxt.setVisible(false);
         } else {
-          view.dot.setFillStyle(0x667280, 1);
+          view.dot.setFillStyle(0x8ea1bc, 1);
+          view.halo.setFillStyle(0xb7c8e8, 0.16);
+          view.halo.setScale(1);
           view.bubbleBg.setVisible(false);
           view.bubbleTxt.setVisible(false);
         }
