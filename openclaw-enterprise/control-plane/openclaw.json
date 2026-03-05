@@ -5,7 +5,12 @@
     "agent": "chief_of_staff",
     "model": "claude-opus-4.6",
     "execution_mode": "state_machine",
-    "direct_code_execution": false
+    "direct_code_execution": false,
+    "sandbox": {
+      "mode": "all",
+      "workspace": "./workspace",
+      "deny_paths": ["~/.ssh", "~/.config", "~/.aws", "~/.gnupg"]
+    }
   },
   "global_controls": {
     "human_in_the_loop_required": true,

@@ -1,1 +1,25 @@
 .worktrees/
+
+# ── Secretos y credenciales — NUNCA commitear ──────────────────
+.env
+*.key
+*.pem
+*.secret
+*.p12
+*.pfx
+auth-profiles.json
+secrets/
+
+# ── Artefactos de entorno ──────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+dist/
+.venv/
+venv/
+
+# ── Datos y backups locales ────────────────────────────────────
+*.sql.bak
+*.dump
+pgdata/

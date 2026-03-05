@@ -1,4 +1,14 @@
-policy_version: 1
+policy_version: 2
+
+# H5: Denegación global de herramientas web para prevenir exfiltración vía prompt injection.
+# Aplica a todos los agentes salvo override explícito. (Doc 5.6)
+global_defaults:
+  denied_tools:
+    - group:web
+    - browser
+    - cron
+    - gateway_admin
+
 agents:
   chief_of_staff:
     model: claude-opus-4.6

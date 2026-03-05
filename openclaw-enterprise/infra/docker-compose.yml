@@ -1,17 +1,52 @@
 version: '3.9'
+
+# Carga variables desde el archivo .env en la raíz del repo.
+# Copia .env.example → .env y rellena los valores antes de ejecutar.
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: openclaw-postgres
     restart: unless-stopped
+
+    # ── C1: Credenciales desde .env, nunca hardcodeadas ─────────
     environment:
-      POSTGRES_USER: openclaw
-      POSTGRES_PASSWORD: openclaw_dev
-      POSTGRES_DB: openclaw
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+
+    # ── C3: Solo loopback — nunca exponer a la red local ────────
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
+
+    # ── C4: Docker hardening ─────────────────────────────────────
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /var/run/postgresql:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_READ_SEARCH
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+
     volumes:
       - pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata:
