@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenClaw Runtime API
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aiadmin
+WorkingDirectory=/home/aiadmin/OpenClaw-System/openclaw-enterprise
+EnvironmentFile=/home/aiadmin/OpenClaw-System/openclaw-enterprise/.env
+Environment=OLLAMA_BASE_URL=http://host.docker.internal:11434
+ExecStart=/home/aiadmin/OpenClaw-System/openclaw-enterprise/.venv/bin/uvicorn scripts.runtime_server:app --host 0.0.0.0 --port 8001
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

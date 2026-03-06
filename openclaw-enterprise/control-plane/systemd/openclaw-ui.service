@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenClaw Mission Control UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aiadmin
+WorkingDirectory=/home/aiadmin/OpenClaw-System/openclaw-enterprise/control-plane/mission-control-ui
+ExecStart=/usr/bin/python3 -m http.server 4173
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
