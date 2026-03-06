@@ -4,10 +4,11 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -20,6 +21,11 @@ try:
     import yaml
 except Exception:  # pragma: no cover - optional dependency fallback
     yaml = None
+
+try:
+    from websockets.sync.client import connect as ws_connect
+except Exception:  # pragma: no cover - optional dependency fallback
+    ws_connect = None
 
 
 logger = logging.getLogger("openclaw.runtime.chat")
@@ -39,6 +45,30 @@ DEFAULT_AGENT_IDS = (
 )
 DEFAULT_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 CHAT_CONTEXT_LIMIT = int(os.getenv("CHAT_CONTEXT_LIMIT", "20"))
+GATEWAY_WS_URL = os.getenv("OPENCLAW_GATEWAY_WS_URL", "ws://127.0.0.1:18789").strip()
+GATEWAY_TOKEN = (
+    os.getenv("OPENCLAW_GATEWAY_TOKEN", "")
+    or os.getenv("OPENCLAW_GATEWAY_AUTH_TOKEN", "")
+).strip()
+GATEWAY_PASSWORD = os.getenv("OPENCLAW_GATEWAY_PASSWORD", "").strip()
+GATEWAY_PROTOCOL = int(os.getenv("OPENCLAW_GATEWAY_PROTOCOL", "3"))
+GATEWAY_CONNECT_TIMEOUT_S = float(os.getenv("OPENCLAW_GATEWAY_CONNECT_TIMEOUT_S", "8"))
+GATEWAY_REQUEST_TIMEOUT_S = float(os.getenv("OPENCLAW_GATEWAY_REQUEST_TIMEOUT_S", "60"))
+GATEWAY_CHAT_TIMEOUT_S = float(os.getenv("OPENCLAW_GATEWAY_CHAT_TIMEOUT_S", "180"))
+GATEWAY_SCOPES = [
+    scope.strip()
+    for scope in os.getenv("OPENCLAW_GATEWAY_SCOPES", "operator.read,operator.write").split(",")
+    if scope.strip()
+]
+GATEWAY_SESSION_TEMPLATE = os.getenv("OPENCLAW_GATEWAY_SESSION_TEMPLATE", "agent:{agent_id}:main")
+GATEWAY_CLIENT_ID = os.getenv("OPENCLAW_GATEWAY_CLIENT_ID", "openclaw-control-ui").strip()
+GATEWAY_CLIENT_MODE = os.getenv("OPENCLAW_GATEWAY_CLIENT_MODE", "ui").strip()
+GATEWAY_ENABLED = os.getenv("OPENCLAW_GATEWAY_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+OLLAMA_FALLBACK_ENABLED = os.getenv("OPENCLAW_OLLAMA_FALLBACK_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 SOURCE_UI = "ui"
 SOURCE_TELEGRAM = "telegram"
@@ -84,6 +114,30 @@ def ensure_chat_table() -> None:
                 """
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_created_at
                 ON mem_audit.chat_messages(agent_id, created_at DESC);
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mem_audit.runtime_events (
+                  id BIGSERIAL PRIMARY KEY,
+                  execution_id TEXT NOT NULL,
+                  agent_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL,
+                  payload TEXT NOT NULL DEFAULT '{}',
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_runtime_events_execution_created_at
+                ON mem_audit.runtime_events(execution_id, created_at DESC);
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_runtime_events_agent_created_at
+                ON mem_audit.runtime_events(agent_id, created_at DESC);
                 """
             )
         conn.commit()
@@ -288,41 +342,343 @@ def insert_chat_message(
     }
 
 
-def call_ollama_chat(*, model: str, messages: list[dict[str, str]]) -> str:
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-    payload = {"model": model, "messages": messages, "stream": False}
-    req = urllib_request.Request(
-        f"{base_url}/api/chat",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+def insert_runtime_event(
+    *,
+    execution_id: str,
+    agent_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mem_audit.runtime_events (execution_id, agent_id, event_type, payload)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    execution_id,
+                    agent_id,
+                    event_type,
+                    json.dumps(payload, ensure_ascii=False, default=str),
+                ),
+            )
+        conn.commit()
 
+
+def _insert_runtime_event_safe(
+    *,
+    execution_id: str,
+    agent_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
     try:
-        with urllib_request.urlopen(req, timeout=120) as response:
-            raw = response.read().decode("utf-8")
-    except urllib_error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Ollama HTTP {exc.code}: {detail[:400]}",
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"No se pudo conectar a Ollama: {exc}") from exc
+        insert_runtime_event(
+            execution_id=execution_id,
+            agent_id=agent_id,
+            event_type=event_type,
+            payload=payload,
+        )
+    except Exception as exc:  # pragma: no cover - observability guard
+        logger.warning("No se pudo persistir runtime_event=%s: %s", event_type, exc)
 
+
+def _extract_text_from_message(raw_message: Any) -> str:
+    if isinstance(raw_message, str):
+        return raw_message.strip()
+    if not isinstance(raw_message, dict):
+        return ""
+
+    text = raw_message.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    content = raw_message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if str(block.get("type") or "").lower() != "text":
+                continue
+            part = block.get("text")
+            if isinstance(part, str) and part.strip():
+                parts.append(part.strip())
+        if parts:
+            return "\n".join(parts).strip()
+    return ""
+
+
+def _build_gateway_error_message(method: str, error: Any) -> str:
+    if not isinstance(error, dict):
+        return f"Gateway {method} failed"
+    code = str(error.get("code") or "UNKNOWN")
+    message = str(error.get("message") or "request failed")
+    details = error.get("details")
+    detail_text = f" details={details}" if details is not None else ""
+    return f"Gateway {method} failed [{code}]: {message}{detail_text}"
+
+
+def _resolve_gateway_session_key(agent_id: str) -> str:
+    template = GATEWAY_SESSION_TEMPLATE or "agent:{agent_id}:main"
+    if "{agent_id}" in template:
+        return template.format(agent_id=agent_id)
+    return template
+
+
+def _gateway_receive_frame(ws: Any, timeout_s: float) -> dict[str, Any]:
+    raw = ws.recv(timeout=timeout_s)
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    if not isinstance(raw, str):
+        raise RuntimeError("Gateway frame inválido")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=502, detail="Respuesta inválida desde Ollama") from exc
+        raise RuntimeError("Gateway devolvió un frame no-JSON") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Gateway devolvió un frame no-object")
+    return parsed
 
-    content = (
-        (parsed.get("message") or {}).get("content")
-        or parsed.get("response")
-        or ""
+
+def _gateway_request(
+    *,
+    ws: Any,
+    method: str,
+    params: dict[str, Any],
+    timeout_s: float,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    req_id = str(uuid.uuid4())
+    ws.send(
+        json.dumps(
+            {
+                "type": "req",
+                "id": req_id,
+                "method": method,
+                "params": params,
+            }
+        )
     )
-    if not isinstance(content, str) or not content.strip():
-        raise HTTPException(status_code=502, detail="Ollama no devolvió contenido")
-    return content.strip()
+    deadline = time.monotonic() + timeout_s
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"Timeout esperando respuesta de {method}")
+        frame = _gateway_receive_frame(ws, timeout_s=remaining)
+        frame_type = frame.get("type")
+
+        if frame_type == "event":
+            if on_event is not None:
+                on_event(frame)
+            continue
+
+        if frame_type != "res":
+            continue
+        if frame.get("id") != req_id:
+            continue
+        if frame.get("ok") is True:
+            payload = frame.get("payload")
+            return payload if isinstance(payload, dict) else {}
+        raise RuntimeError(_build_gateway_error_message(method, frame.get("error")))
+
+
+def call_openclaw_gateway_chat(
+    *,
+    agent_id: str,
+    message: str,
+    execution_id: str,
+) -> dict[str, Any]:
+    if ws_connect is None:
+        raise RuntimeError(
+            "Dependencia websockets no disponible. Instala 'websockets' para usar OPENCLAW gateway."
+        )
+
+    session_key = _resolve_gateway_session_key(agent_id)
+    chat_payload: dict[str, Any] = {}
+    latest_delta_text = ""
+    expected_run_ids = {execution_id}
+
+    def on_event(frame: dict[str, Any]) -> None:
+        nonlocal latest_delta_text
+        if frame.get("type") != "event":
+            return
+        if frame.get("event") != "chat":
+            return
+        payload = frame.get("payload")
+        if not isinstance(payload, dict):
+            return
+        run_id_value = str(payload.get("runId") or "")
+        if run_id_value not in expected_run_ids:
+            return
+        if payload.get("sessionKey") != session_key:
+            return
+        if payload.get("state") == "delta":
+            delta_text = _extract_text_from_message(payload.get("message"))
+            if delta_text:
+                latest_delta_text = delta_text
+        if payload.get("state") in {"final", "error", "aborted"}:
+            chat_payload.clear()
+            chat_payload.update(payload)
+
+    connect_params: dict[str, Any] = {
+        "minProtocol": GATEWAY_PROTOCOL,
+        "maxProtocol": GATEWAY_PROTOCOL,
+        "client": {
+            "id": GATEWAY_CLIENT_ID,
+            "version": "mission-control-runtime",
+            "platform": "linux",
+            "mode": GATEWAY_CLIENT_MODE,
+            "instanceId": execution_id,
+        },
+        "role": "operator",
+        "scopes": GATEWAY_SCOPES,
+        "caps": [],
+        "locale": "es-ES",
+        "userAgent": "mission-control-runtime/1.0.0",
+    }
+    auth_payload: dict[str, str] = {}
+    if GATEWAY_TOKEN:
+        auth_payload["token"] = GATEWAY_TOKEN
+    if GATEWAY_PASSWORD:
+        auth_payload["password"] = GATEWAY_PASSWORD
+    if auth_payload:
+        connect_params["auth"] = auth_payload
+
+    with ws_connect(
+        GATEWAY_WS_URL,
+        open_timeout=GATEWAY_CONNECT_TIMEOUT_S,
+        close_timeout=5,
+        ping_interval=20,
+        ping_timeout=20,
+        max_size=4 * 1024 * 1024,
+    ) as ws:
+        hello_payload = _gateway_request(
+            ws=ws,
+            method="connect",
+            params=connect_params,
+            timeout_s=GATEWAY_REQUEST_TIMEOUT_S,
+            on_event=on_event,
+        )
+        send_payload = _gateway_request(
+            ws=ws,
+            method="chat.send",
+            params={
+                "sessionKey": session_key,
+                "message": message,
+                "deliver": False,
+                "idempotencyKey": execution_id,
+            },
+            timeout_s=GATEWAY_REQUEST_TIMEOUT_S,
+            on_event=on_event,
+        )
+        run_id = str(send_payload.get("runId") or execution_id)
+        expected_run_ids.add(run_id)
+
+        # chat.send es no-bloqueante: esperamos el evento chat final/error.
+        deadline = time.monotonic() + GATEWAY_CHAT_TIMEOUT_S
+        while not chat_payload:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("Timeout esperando evento chat final desde OpenClaw gateway")
+            frame = _gateway_receive_frame(ws, timeout_s=remaining)
+            if frame.get("type") != "event":
+                continue
+            on_event(frame)
+
+        state = str(chat_payload.get("state") or "").lower()
+        if state == "error":
+            raise RuntimeError(str(chat_payload.get("errorMessage") or "chat error"))
+        if state == "aborted":
+            raise RuntimeError("chat abortado por runtime OpenClaw")
+
+        assistant_text = _extract_text_from_message(chat_payload.get("message")) or latest_delta_text
+        if not assistant_text:
+            history_payload = _gateway_request(
+                ws=ws,
+                method="chat.history",
+                params={"sessionKey": session_key, "limit": 20},
+                timeout_s=GATEWAY_REQUEST_TIMEOUT_S,
+                on_event=on_event,
+            )
+            rows = history_payload.get("messages")
+            if isinstance(rows, list):
+                for row in reversed(rows):
+                    if not isinstance(row, dict):
+                        continue
+                    if str(row.get("role") or "").lower() != "assistant":
+                        continue
+                    assistant_text = _extract_text_from_message(row)
+                    if assistant_text:
+                        break
+        if not assistant_text:
+            raise RuntimeError("OpenClaw gateway no devolvió contenido del asistente")
+
+        return {
+            "run_id": run_id,
+            "session_key": session_key,
+            "hello": hello_payload,
+            "send": send_payload,
+            "chat": dict(chat_payload),
+            "response": assistant_text.strip(),
+        }
+
+
+def _candidate_ollama_base_urls() -> list[str]:
+    configured = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return [configured]
+    # En Docker Linux, host.docker.internal puede requerir --add-host, por eso
+    # también probamos la gateway bridge usual (172.17.0.1).
+    return [
+        "http://127.0.0.1:11434",
+        "http://host.docker.internal:11434",
+        "http://172.17.0.1:11434",
+    ]
+
+
+def call_ollama_chat(*, model: str, messages: list[dict[str, str]]) -> str:
+    payload = {"model": model, "messages": messages, "stream": False}
+    attempted_errors: list[str] = []
+
+    for base_url in _candidate_ollama_base_urls():
+        req = urllib_request.Request(
+            f"{base_url}/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(req, timeout=120) as response:
+                raw = response.read().decode("utf-8")
+        except urllib_error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            attempted_errors.append(f"{base_url} -> HTTP {exc.code}: {detail[:160]}")
+            continue
+        except Exception as exc:
+            attempted_errors.append(f"{base_url} -> {exc}")
+            continue
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=502, detail="Respuesta inválida desde Ollama") from exc
+
+        content = (
+            (parsed.get("message") or {}).get("content")
+            or parsed.get("response")
+            or ""
+        )
+        if not isinstance(content, str) or not content.strip():
+            raise HTTPException(status_code=502, detail="Ollama no devolvió contenido")
+        return content.strip()
+
+    detail = " | ".join(attempted_errors[:3]) if attempted_errors else "sin detalles"
+    raise HTTPException(status_code=502, detail=f"No se pudo conectar a Ollama: {detail}")
 
 
 app = FastAPI(title="OpenClaw Runtime Server", version="1.0.0")
@@ -339,7 +695,7 @@ app.add_middleware(
 def on_startup() -> None:
     try:
         ensure_chat_table()
-        logger.info("Tabla mem_audit.chat_messages lista")
+        logger.info("Tablas mem_audit.chat_messages y mem_audit.runtime_events listas")
     except Exception as exc:  # pragma: no cover - startup guard
         logger.exception("Error inicializando tabla de chat: %s", exc)
 
@@ -438,14 +794,67 @@ def post_chat(payload: ChatRequest) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error persistiendo mensaje: {exc}") from exc
 
-    messages_for_model: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-    for row in history_rows:
-        role = row["role"]
-        if role not in {"user", "assistant"}:
-            continue
-        messages_for_model.append({"role": role, "content": row["content"]})
+    _insert_runtime_event_safe(
+        execution_id=execution_id,
+        agent_id=agent_id,
+        event_type="chat.user.received",
+        payload={
+            "source": source,
+            "message_id": user_row.get("id"),
+            "message": message,
+        },
+    )
 
-    assistant_text = call_ollama_chat(model=model, messages=messages_for_model)
+    assistant_text: str | None = None
+    provider = "gateway" if GATEWAY_ENABLED else "ollama"
+    response_model = model
+    gateway_meta: dict[str, Any] | None = None
+
+    if GATEWAY_ENABLED:
+        try:
+            gateway_meta = call_openclaw_gateway_chat(
+                agent_id=agent_id,
+                message=message,
+                execution_id=execution_id,
+            )
+            assistant_text = str(gateway_meta.get("response") or "").strip()
+            response_model = "openclaw-gateway"
+            _insert_runtime_event_safe(
+                execution_id=execution_id,
+                agent_id=agent_id,
+                event_type="chat.gateway.final",
+                payload={
+                    "run_id": gateway_meta.get("run_id"),
+                    "session_key": gateway_meta.get("session_key"),
+                    "state": (gateway_meta.get("chat") or {}).get("state"),
+                },
+            )
+        except Exception as exc:
+            logger.exception("Error enviando chat al gateway OpenClaw: %s", exc)
+            _insert_runtime_event_safe(
+                execution_id=execution_id,
+                agent_id=agent_id,
+                event_type="chat.gateway.error",
+                payload={"error": str(exc)},
+            )
+            if not OLLAMA_FALLBACK_ENABLED:
+                raise HTTPException(status_code=502, detail=f"Error en OpenClaw gateway: {exc}") from exc
+            provider = "ollama_fallback"
+
+    if assistant_text is None:
+        messages_for_model: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+        for row in history_rows:
+            role = row["role"]
+            if role not in {"user", "assistant"}:
+                continue
+            messages_for_model.append({"role": role, "content": row["content"]})
+        assistant_text = call_ollama_chat(model=model, messages=messages_for_model)
+        _insert_runtime_event_safe(
+            execution_id=execution_id,
+            agent_id=agent_id,
+            event_type="chat.ollama.final",
+            payload={"model": model},
+        )
 
     try:
         assistant_row = insert_chat_message(
@@ -455,17 +864,33 @@ def post_chat(payload: ChatRequest) -> dict[str, Any]:
             source=source,
             execution_id=execution_id,
         )
+        _insert_runtime_event_safe(
+            execution_id=execution_id,
+            agent_id=agent_id,
+            event_type="chat.assistant.persisted",
+            payload={
+                "message_id": assistant_row.get("id"),
+                "provider": provider,
+            },
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error guardando respuesta: {exc}") from exc
 
     return {
         "agent_id": agent_id,
         "execution_id": execution_id,
-        "model": model,
+        "model": response_model,
+        "provider": provider,
         "source": source,
         "response": assistant_text,
         "user_message": user_row,
         "assistant_message": assistant_row,
+        "gateway": {
+            "run_id": gateway_meta.get("run_id"),
+            "session_key": gateway_meta.get("session_key"),
+        }
+        if gateway_meta
+        else None,
     }
 
 
