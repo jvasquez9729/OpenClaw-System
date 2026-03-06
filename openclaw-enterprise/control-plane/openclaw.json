@@ -1,0 +1,34 @@
+{
+  "missionControl": {
+    "apiBase": "http://127.0.0.1:8001",
+    "runtimeChatBackend": "gateway",
+    "gateway": {
+      "wsUrl": "ws://127.0.0.1:18789",
+      "authType": "token",
+      "tokenEnv": "GATEWAY_AUTH_TOKEN",
+      "sessionPrefix": "mc:agent:"
+    }
+  },
+  "docker": {
+    "container": "openclaw_prod",
+    "ollamaBaseUrl": "http://host.docker.internal:11434",
+    "requiredAddHost": "host.docker.internal:host-gateway",
+    "verifyCommand": "docker exec openclaw_prod curl -sf http://host.docker.internal:11434/api/tags"
+  },
+  "systemd": {
+    "openclaw-api.service": {
+      "description": "OpenClaw Runtime API",
+      "workingDirectory": "/home/aiadmin/OpenClaw-System/openclaw-enterprise",
+      "environmentFile": "/home/aiadmin/OpenClaw-System/openclaw-enterprise/.env",
+      "environment": [
+        "OLLAMA_BASE_URL=http://host.docker.internal:11434"
+      ],
+      "execStart": "/home/aiadmin/OpenClaw-System/openclaw-enterprise/.venv/bin/uvicorn scripts.runtime_server:app --host 0.0.0.0 --port 8001"
+    },
+    "openclaw-ui.service": {
+      "description": "OpenClaw Mission Control UI static server",
+      "workingDirectory": "/home/aiadmin/OpenClaw-System/openclaw-enterprise/control-plane/mission-control-ui",
+      "execStart": "/usr/bin/python3 -m http.server 4173"
+    }
+  }
+}
